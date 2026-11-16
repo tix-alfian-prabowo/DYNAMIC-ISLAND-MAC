@@ -452,15 +452,15 @@ private struct NotchBannerView: View {
     }
 }
 
-/// Puts a banner away at once; the notification stays in the Alerts tab. `compact` is the small one
-/// in the corner of the toast in the open panel.
+/// Puts a banner away at once, with the ones waiting behind it; they stay in the Alerts tab.
+/// `compact` is the small one in the corner of the toast in the open panel.
 private struct BannerCloseButton: View {
     @EnvironmentObject var notificationManager: NotificationManager
     var compact = false
 
     var body: some View {
         Button {
-            notificationManager.dismissBanner()
+            notificationManager.dismissBanners()
         } label: {
             Image(systemName: "xmark")
                 .font(.system(size: compact ? 7 : 9, weight: .bold))

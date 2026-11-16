@@ -100,6 +100,12 @@ class NotificationManager: ObservableObject {
     /// and how many before it brought none.
     private var awaitedBadgeRises: [String: UUID] = [:]
     private var unconfirmedBadgeRises: [String: Int] = [:]
+    /// Apps whose banner was just closed with its × (lowercased bundle identifiers), and when: the
+    /// details that follow a "New notification" banner don't drop the notch down again.
+    private var closedApps: [String: Date] = [:]
+    /// How long a closed app's notifications only go to the Alerts tab; covers the details
+    /// arriving after its Dock badge went up.
+    private let closedAppQuiet: TimeInterval = 10
     private let maxNotifications = 50
     private var hasRequestedAuthorization = false
 
@@ -133,9 +139,16 @@ class NotificationManager: ObservableObject {
             unconfirmedBadgeRises[app] = 0
         }
 
-        // During a Focus it's only added to the feed.
-        guard !FocusStatus.isActive else { return }
+        // During a Focus it's only added to the feed, and so are the details of a banner just closed.
+        guard !FocusStatus.isActive, !wasJustClosed(bundleID) else { return }
         enqueueBanner(notification)
+    }
+
+    private func wasJustClosed(_ bundleID: String?) -> Bool {
+        guard let app = bundleID?.lowercased(), let closed = closedApps[app] else { return false }
+        if Date().timeIntervalSince(closed) < closedAppQuiet { return true }
+        closedApps[app] = nil
+        return false
     }
 
     /// One of the island's own live activities (Claude Code, a meeting, charging, headphones, a
@@ -180,7 +193,7 @@ class NotificationManager: ObservableObject {
     func announce(appBundleID: String, appName: String) {
         let app = appBundleID.lowercased()
         // Apps that badge without notifying (like System Settings for updates) aren't announced.
-        guard !FocusStatus.isActive,
+        guard !FocusStatus.isActive, !wasJustClosed(app),
               notifyingApps?.contains(app) ?? true,
               unconfirmedBadgeRises[app, default: 0] < maxUnconfirmedBadgeRises else { return }
 
@@ -242,6 +255,20 @@ class NotificationManager: ObservableObject {
     func dismissBanner() {
         heldBannerID = nil
         showNextBanner()
+    }
+
+    /// The banner's ×: puts away the banner and the ones waiting behind it, so the notch goes back
+    /// up. They stay in the Alerts tab (pokes in the Poke tab); waiting ones that aren't kept
+    /// there, like a meeting reminder or a timer, still show, since they'd be lost otherwise. For
+    /// another app's banner, its notifications in the next few seconds (like the details after
+    /// "New notification") only go to the Alerts tab.
+    func dismissBanners() {
+        if let banner, banner.type == .app, let app = banner.appBundleID?.lowercased() {
+            closedApps[app] = Date()
+        }
+        let inFeed = Set(notifications.map(\.id))
+        bannerQueue.removeAll { inFeed.contains($0.id) }
+        dismissBanner()
     }
 
     /// While the pointer rests on the banner it stays; it goes shortly after the pointer leaves.
