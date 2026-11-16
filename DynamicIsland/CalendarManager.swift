@@ -46,6 +46,11 @@ class CalendarManager: ObservableObject {
     private var refreshTask: Task<Void, Never>?
     private var changeTask: Task<Void, Never>?
     private var meetingTask: Task<Void, Never>?
+    private var syncTask: Task<Void, Never>?
+    private var wakeObserver: NSObjectProtocol?
+    /// How often the calendar accounts (Google, iCloud, Exchange…) are asked for changes, so a
+    /// meeting added at short notice shows within about a minute rather than at macOS's own pace.
+    static let syncInterval: TimeInterval = 60
     /// Reminders already shown ("<event id>.soon" / ".start") and when their event starts.
     private var shownReminders: [String: Date] = [:]
 
@@ -68,12 +73,35 @@ class CalendarManager: ObservableObject {
                 try? await Task.sleep(for: .seconds(300))
             }
         }
+        // macOS syncs calendar accounts on its own schedule (every 15 minutes, or only when
+        // Calendar is open, for some accounts); ask for changes more often. New events then
+        // arrive through EKEventStoreChanged above.
+        syncTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.syncInterval))
+                self?.syncAccounts()
+            }
+        }
+        // Events added while the Mac slept, and a new day after waking.
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.syncAccounts()
+                self?.reload()
+            }
+        }
+    }
+
+    /// Asks the calendar accounts for changes; only fetches when there may be some.
+    private func syncAccounts() {
+        guard hasAccess else { return }
+        store.refreshSourcesIfNecessary()
     }
 
     deinit {
         refreshTask?.cancel()
         changeTask?.cancel()
         meetingTask?.cancel()
+        syncTask?.cancel()
     }
 
     var canRequestAccess: Bool {

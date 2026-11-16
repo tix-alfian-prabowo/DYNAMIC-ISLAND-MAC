@@ -2832,9 +2832,9 @@ private struct CalendarWidget: View {
         if events.isEmpty {
             VStack(spacing: 4) {
                 Image(systemName: "calendar")
-                    .font(.system(size: 13))
+                    .font(.system(size: layout.wide(13, 16)))
                 Text(Calendar.current.isDate(selectedDay, inSameDayAs: today) ? "Nothing for today" : "Nothing planned")
-                    .font(.system(size: 11))
+                    .font(.system(size: layout.wide(11, 13)))
             }
             .foregroundColor(.gray)
             .frame(maxWidth: .infinity)
@@ -2845,7 +2845,9 @@ private struct CalendarWidget: View {
 }
 
 /// Every event of the day, scrolled to the one shown in the meeting card; a click shows another.
+/// Bigger in the wider panel.
 private struct EventList: View {
+    @EnvironmentObject var layout: IslandLayout
     let events: [CalendarEvent]
     let highlightedID: String?
     let onSelect: (CalendarEvent) -> Void
@@ -2853,7 +2855,7 @@ private struct EventList: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: layout.wide(2, 3)) {
                     ForEach(events) { event in
                         row(event)
                             .id(event.id)
@@ -2875,29 +2877,29 @@ private struct EventList: View {
         let isOver = event.end <= Date()
 
         return Button { onSelect(event) } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: layout.wide(6, 8)) {
                 RoundedRectangle(cornerRadius: 1.5)
                     .fill(Color(event.color))
-                    .frame(width: 3, height: 24)
-                VStack(alignment: .leading, spacing: 1) {
+                    .frame(width: 3, height: layout.wide(24, 32))
+                VStack(alignment: .leading, spacing: layout.wide(1, 2)) {
                     Text(event.title)
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: layout.wide(10, 12.5), weight: .semibold))
                         .strikethrough(event.isDeclined)
                         .lineLimit(1)
                     Text(event.timeRange)
-                        .font(.system(size: 9))
+                        .font(.system(size: layout.wide(9, 11)))
                         .foregroundColor(.gray)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 4)
                 if event.joinURL != nil && !isOver {
                     Image(systemName: "video.fill")
-                        .font(.system(size: 8))
+                        .font(.system(size: layout.wide(8, 10)))
                         .foregroundColor(.green)
                 }
             }
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
+            .padding(.horizontal, layout.wide(5, 7))
+            .padding(.vertical, layout.wide(2, 3))
             .opacity(isOver && !isHighlighted ? 0.5 : 1)
             .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(isHighlighted ? 0.1 : 0)))
             .contentShape(Rectangle())
@@ -2908,8 +2910,9 @@ private struct EventList: View {
 }
 
 /// The picked meeting, or the one happening now or next: when it is, where, and a big Join button
-/// for its video call.
+/// for its video call. Bigger in the wider panel.
 private struct MeetingCard: View {
+    @EnvironmentObject var layout: IslandLayout
     let event: CalendarEvent?
     let hasEvents: Bool
     let hasAccess: Bool
@@ -2923,9 +2926,9 @@ private struct MeetingCard: View {
             } else {
                 VStack(spacing: 6) {
                     Image(systemName: "video.badge.checkmark")
-                        .font(.system(size: 16))
+                        .font(.system(size: layout.wide(16, 20)))
                     Text(hasAccess ? (hasEvents ? "Pick a meeting" : "No meetings") : "Calendar is off")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: layout.wide(11, 13), weight: .medium))
                 }
                 .foregroundColor(.gray)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2938,24 +2941,24 @@ private struct MeetingCard: View {
         let status = status(of: event, now: now)
         let canJoin = event.joinURL != nil && event.end > now
 
-        return VStack(alignment: .leading, spacing: 3) {
+        return VStack(alignment: .leading, spacing: layout.wide(3, 5)) {
             HStack(spacing: 4) {
                 Circle()
                     .fill(status.color)
-                    .frame(width: 6, height: 6)
+                    .frame(width: layout.wide(6, 8), height: layout.wide(6, 8))
                 Text(status.text)
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.system(size: layout.wide(9, 11.5), weight: .bold))
                     .foregroundColor(status.color)
                     .lineLimit(1)
             }
 
             Text(event.title)
-                .font(.system(size: 13, weight: .bold))
+                .font(.system(size: layout.wide(13, 17), weight: .bold))
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
 
             Text(event.isAllDay ? "All day" : "\(event.timeRange) · \(duration(of: event))")
-                .font(.system(size: 10))
+                .font(.system(size: layout.wide(10, 12.5)))
                 .foregroundColor(.gray)
                 .lineLimit(1)
 
@@ -2966,11 +2969,11 @@ private struct MeetingCard: View {
                 } else {
                     Circle()
                         .fill(Color(event.color))
-                        .frame(width: 6, height: 6)
+                        .frame(width: layout.wide(6, 7), height: layout.wide(6, 7))
                     Text(event.calendarName)
                 }
             }
-            .font(.system(size: 9))
+            .font(.system(size: layout.wide(9, 11)))
             .foregroundColor(.gray)
             .lineLimit(1)
 
@@ -2979,9 +2982,9 @@ private struct MeetingCard: View {
             if canJoin, let url = event.joinURL {
                 Button { join(url) } label: {
                     Label("Join \(service(of: url))", systemImage: "video.fill")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: layout.wide(11, 13.5), weight: .bold))
                         .frame(maxWidth: .infinity)
-                        .frame(height: 26)
+                        .frame(height: layout.wide(26, 34))
                         .background(Capsule().fill(Color.green))
                         .contentShape(Capsule())
                 }
@@ -2992,9 +2995,9 @@ private struct MeetingCard: View {
             } else {
                 Button(action: openCalendar) {
                     Label("Open in Calendar", systemImage: "calendar")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: layout.wide(10, 12.5), weight: .semibold))
                         .frame(maxWidth: .infinity)
-                        .frame(height: 24)
+                        .frame(height: layout.wide(24, 32))
                         .background(Capsule().fill(Color.white.opacity(0.1)))
                         .contentShape(Capsule())
                 }
@@ -3002,7 +3005,7 @@ private struct MeetingCard: View {
                 .pointingHandCursor()
             }
         }
-        .padding(10)
+        .padding(layout.wide(10, 14))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
