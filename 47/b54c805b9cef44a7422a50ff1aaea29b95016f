@@ -1,0 +1,51 @@
+DynamicIsland/NotchDrop.swift
+  s_8d4b63dc56ae38::t_b298b31101c6ce 113-115,146,394,507
+  s_8d4b63dc56ae38::t_0c65fe449de9a5 1-112,116-145,147-163,165-393,395-506,508-621
+  s_2017a627611ac9::t_768e60d822b392 164
+DynamicIsland/NotchDropView.swift
+  s_8d4b63dc56ae38::t_a1ec3fd98cf1f3 67,420-421,444,459
+  s_8d4b63dc56ae38::t_f84302c23fbfbe 1-66,68-419,422-443,445-448,452-458,460-522
+  s_2017a627611ac9::t_7229dd9927d66d 449-451
+DynamicIsland/NotchDropGame.swift
+  s_8d4b63dc56ae38::t_c607bd23746ff5 1-85,88-99,102-252,256-257,259-260,273-333,335-348
+  s_8d4b63dc56ae38::t_4520abbe23a874 86-87,100-101,334
+  s_8d4b63dc56ae38::t_84528bfabb79f8 253-255,258,261-272
+DynamicIsland/MyApp.swift
+  s_8d4b63dc56ae38::t_3b199fcb98b122 46
+  s_8d4b63dc56ae38::t_414661a59f7852 47-49
+  s_8d4b63dc56ae38::t_af11775d7c408c 50
+DynamicIsland/FloatingPanel.swift
+  s_8d4b63dc56ae38::t_b298b31101c6ce 14,24,30,100-101,124-127,197-199,223
+DynamicIsland/PokeService.swift
+  s_8d4b63dc56ae38::t_ff136f197ce80f 793-805
+DynamicIsland/NotificationManager.swift
+  s_8d4b63dc56ae38::t_b298b31101c6ce 37-38,62
+DynamicIsland/NotchViews.swift
+  s_8d4b63dc56ae38::t_a1ec3fd98cf1f3 411-415,428-432,520,701-702
+README.md
+  s_8d4b63dc56ae38::t_8377d1b59c0948 25,35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "47b54c805b9cef44a7422a50ff1aaea29b95016f",
+  "prompts": {},
+  "sessions": {
+    "s_2017a627611ac9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "eff91702-4034-4bc1-ad1c-97d02d5d63c3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Alfian Prabowo <103156797+fianprabowo@users.noreply.github.com>"
+    },
+    "s_8d4b63dc56ae38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e007752f-f59f-43f7-8009-9d3757d57f57",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Alfian Prabowo <103156797+fianprabowo@users.noreply.github.com>"
+    }
+  }
+}
