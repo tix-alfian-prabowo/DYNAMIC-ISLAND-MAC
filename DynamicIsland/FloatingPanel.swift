@@ -84,6 +84,9 @@ class IslandLayout: ObservableObject {
     /// Whether the collapsed island shows the volume or brightness level beside the notch.
     @Published private(set) var showsHUD = false
     @Published private(set) var notchSize: CGSize
+    /// Goes up each time the island's monitor changes (it moved, or monitors were plugged in or
+    /// out), for views placed against the screen.
+    @Published private(set) var screenChanges = 0
     /// How big the open panel is: YouTube in the Media tab takes more room.
     @Published private(set) var panelStyle = PanelStyle.regular
 
@@ -360,11 +363,49 @@ class IslandLayout: ObservableObject {
 
     func refreshNotch() {
         notchSize = Self.measureNotch()
+        screenChanges += 1
     }
 
-    /// The built-in display with a notch, or the main display on Macs without one.
+    /// The monitor the pointer was last on, by its display ID, so the island follows you between
+    /// monitors. Nil until the pointer first moves.
+    private static var pointerScreenID: CGDirectDisplayID?
+
+    /// The monitor the pointer was last on. Before that, or once that monitor is unplugged, the
+    /// built-in display with a notch, or the main display on Macs without one.
     static var notchScreen: NSScreen? {
-        NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.main
+        if let id = pointerScreenID, let screen = NSScreen.screens.first(where: { $0.displayID == id }) {
+            return screen
+        }
+        return NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.main
+    }
+
+    /// Puts the island on `screen`, measuring its notch (or the virtual one); false when it's
+    /// already there.
+    func move(to screen: NSScreen) -> Bool {
+        guard let id = screen.displayID, id != Self.notchScreen?.displayID else { return false }
+        Self.pointerScreenID = id
+        refreshNotch()
+        return true
+    }
+
+    /// Whether an app is full screen on `screen`: one of its windows covers all of it, the menu
+    /// bar's place included. Only windows' sizes are read, which needs no permission.
+    static func hasFullScreenApp(on screen: NSScreen) -> Bool {
+        guard let primary = NSScreen.screens.first,
+              let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+        else { return false }
+        // Window bounds count from the top-left of the main display, screens from its bottom-left.
+        let target = CGRect(x: screen.frame.minX, y: primary.frame.maxY - screen.frame.maxY,
+                            width: screen.frame.width, height: screen.frame.height)
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        return windows.contains { info in
+            guard (info[kCGWindowLayer as String] as? Int) == 0,
+                  (info[kCGWindowOwnerPID as String] as? Int32) != ownPID,
+                  let bounds = (info[kCGWindowBounds as String] as? NSDictionary).flatMap({ CGRect(dictionaryRepresentation: $0) })
+            else { return false }
+            return abs(bounds.minX - target.minX) < 1 && abs(bounds.minY - target.minY) < 1
+                && abs(bounds.width - target.width) < 1 && abs(bounds.height - target.height) < 1
+        }
     }
 
     /// Without a real notch, a menu-bar-height "virtual notch" is used instead.
@@ -373,7 +414,26 @@ class IslandLayout: ObservableObject {
         if let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea, screen.safeAreaInsets.top > 0 {
             return CGSize(width: screen.frame.width - left.width - right.width, height: screen.safeAreaInsets.top)
         }
-        return CGSize(width: 185, height: max(screen.frame.maxY - screen.visibleFrame.maxY, 24))
+        let menuBar = screen.frame.maxY - screen.visibleFrame.maxY
+        return CGSize(width: 185, height: menuBar > 0 ? menuBar : menuBarHeight(on: screen) ?? 24)
+    }
+
+    /// The height of the menu bar macOS draws on `screen`, which a second monitor's visible frame
+    /// can leave out: the window server's menu bar window along that monitor's top edge.
+    private static func menuBarHeight(on screen: NSScreen) -> CGFloat? {
+        guard let primary = NSScreen.screens.first,
+              let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]
+        else { return nil }
+        let top = primary.frame.maxY - screen.frame.maxY
+        let menuLevel = Int(CGWindowLevelForKey(.mainMenuWindow))
+        return windows.lazy.compactMap { info -> CGFloat? in
+            guard (info[kCGWindowLayer as String] as? Int) == menuLevel,
+                  let bounds = (info[kCGWindowBounds as String] as? NSDictionary).flatMap({ CGRect(dictionaryRepresentation: $0) }),
+                  abs(bounds.minX - screen.frame.minX) < 1, abs(bounds.minY - top) < 1,
+                  abs(bounds.width - screen.frame.width) < 1, bounds.height > 0, bounds.height < 60
+            else { return nil }
+            return bounds.height
+        }.first
     }
 }
 
@@ -394,6 +454,13 @@ class FloatingPanel: NSPanel {
     private var hoverCloseWorkItem: DispatchWorkItem?
     private var mouseMonitors: [Any] = []
     private var isMouseInside = false
+    /// The frame of the monitor the island is on, so most pointer moves don't look at the monitors.
+    private var islandScreenFrame: NSRect?
+    /// A monitor without a notch with an app full screen on it: the island would cover the top of
+    /// that app, so it stays off it until the Space changes.
+    private var fullScreenDisplayID: CGDirectDisplayID?
+    /// Set for a second after the Space changes, while an app may still be growing to full screen.
+    private var spaceCheckWorkItem: DispatchWorkItem?
     private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "DynamicIsland", category: "Panel")
 
     private static let floatingPositionKey = "islandFloatingTopLeft"
@@ -434,6 +501,7 @@ class FloatingPanel: NSPanel {
         // In floating mode the window resizes itself with the content; re-anchor it every time.
         NotificationCenter.default.addObserver(self, selector: #selector(reposition), name: NSWindow.didResizeNotification, object: self)
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged), name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(spaceChanged), name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
 
         layout.$isPinnedToNotch
             .sink { [weak self] pinned in self?.applyMode(pinnedToNotch: pinned) }
@@ -499,8 +567,10 @@ class FloatingPanel: NSPanel {
     // MARK: Hover
 
     private func pointerMoved() {
-        guard layout.isPinnedToNotch, layout.openOnHover, isVisible else { return }
+        guard layout.isPinnedToNotch, isVisible else { return }
         let location = NSEvent.mouseLocation
+        followPointer(to: location)
+        guard layout.openOnHover else { return }
         let inside = layout.isExpanded ? containsPointer(location) : notchHoverRect.contains(location)
         guard inside != isMouseInside else { return }
         isMouseInside = inside
@@ -552,6 +622,69 @@ class FloatingPanel: NSPanel {
         }
         hoverCloseWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+    }
+
+    // MARK: Monitors
+
+    /// With more than one monitor, the closed island moves to the one the pointer is on. Open, it
+    /// stays put, so it can be used; it follows once it has closed and the window has shrunk back,
+    /// so a closing panel isn't cut off. It stays off a monitor without a notch that has an app
+    /// full screen, where it would cover the top of that app.
+    private func followPointer(to location: NSPoint) {
+        if let current = islandScreenFrame, Self.screenFrame(current, contains: location) { return }
+        guard layout.isPinnedToNotch, !layout.isExpanded, spaceCheckWorkItem == nil, NSScreen.screens.count > 1,
+              abs(frame.width - layout.notchWindowSize.width) < 1, abs(frame.height - layout.notchWindowSize.height) < 1,
+              let screen = NSScreen.screens.first(where: { Self.screenFrame($0.frame, contains: location) }),
+              let id = screen.displayID, id != fullScreenDisplayID
+        else { return }
+        if screen.safeAreaInsets.top == 0 && IslandLayout.hasFullScreenApp(on: screen) {
+            fullScreenDisplayID = id
+            log.info("Staying off the monitor with the pointer: an app is full screen on it")
+            return
+        }
+        moveIsland(to: screen)
+    }
+
+    /// The pointer pushed against a monitor's top edge is on that monitor, so the top edge counts.
+    private static func screenFrame(_ frame: NSRect, contains point: NSPoint) -> Bool {
+        point.x >= frame.minX && point.x < frame.maxX && point.y >= frame.minY && point.y <= frame.maxY
+    }
+
+    private func moveIsland(to screen: NSScreen) {
+        islandScreenFrame = screen.frame
+        guard layout.move(to: screen) else { return }
+        log.info("Moved to a monitor \(Int(screen.frame.width))×\(Int(screen.frame.height)) (\(screen.safeAreaInsets.top > 0 ? "with" : "without", privacy: .public) a notch)")
+        hoverOpenWorkItem?.cancel()
+        isMouseInside = false
+        container.fixedContentSize = layout.notchLargestWindowSize
+        setNotchSize(layout.notchWindowSize)
+    }
+
+    /// Going full screen (or leaving it) switches Spaces; once the app has finished filling the
+    /// monitor, an island over a full-screen app goes back to the display with the notch.
+    @objc private func spaceChanged() {
+        fullScreenDisplayID = nil
+        spaceCheckWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.spaceCheckWorkItem = nil
+            self?.settle()
+        }
+        spaceCheckWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
+    }
+
+    /// Once the island is closed and its window back to size: off a full-screen app, then to the
+    /// pointer's monitor.
+    private func settle() {
+        guard layout.isPinnedToNotch, !layout.isExpanded else { return }
+        if let screen = IslandLayout.notchScreen, screen.safeAreaInsets.top == 0,
+           let notched = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }),
+           IslandLayout.hasFullScreenApp(on: screen) {
+            fullScreenDisplayID = screen.displayID
+            log.info("An app went full screen on the island's monitor; back to the display with the notch")
+            moveIsland(to: notched)
+        }
+        followPointer(to: NSEvent.mouseLocation)
     }
 
     /// The collapsed island on screen, slightly enlarged so the very edge of the notch counts.
@@ -607,6 +740,8 @@ class FloatingPanel: NSPanel {
             let work = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 self.setNotchSize(self.layout.notchWindowSize)
+                // The pointer may have gone to another monitor while the panel was open.
+                self.settle()
             }
             shrinkWorkItem = work
             // Wait for the shrinking spring to settle before making the window smaller.
@@ -626,6 +761,8 @@ class FloatingPanel: NSPanel {
     }
 
     @objc private func screensChanged() {
+        islandScreenFrame = nil
+        fullScreenDisplayID = nil
         layout.refreshNotch()
         if layout.isPinnedToNotch {
             container.fixedContentSize = layout.notchLargestWindowSize
@@ -728,5 +865,12 @@ struct WindowDragArea: NSViewRepresentable {
             mouseDownLocation = nil
             windowOriginAtMouseDown = nil
         }
+    }
+}
+
+extension NSScreen {
+    /// The display's ID, which stays the same while it's connected (unlike the NSScreen object).
+    var displayID: CGDirectDisplayID? {
+        (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
     }
 }

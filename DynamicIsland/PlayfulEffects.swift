@@ -62,13 +62,7 @@ final class FaceMood: ObservableObject {
     /// `notchSize` places the area around the notch where the pointer counts as near.
     func startWatching(notchSize: CGSize) {
         watchers += 1
-        if let screen = IslandLayout.notchScreen {
-            // The island with its wings, and 90 points either side and 70 below it.
-            let width = notchSize.width + IslandLayout.notchWing * 2 + 180
-            let height = notchSize.height + 70
-            nearRect = CGRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - height, width: width, height: height)
-            faceX = screen.frame.midX - notchSize.width / 2 - IslandLayout.notchWing / 2
-        }
+        place(notchSize: notchSize)
         guard monitors.isEmpty else { return }
         pointerMoved()
         let events: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged]
@@ -87,6 +81,16 @@ final class FaceMood: ObservableObject {
         idleTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.checkIdle() }
         }
+    }
+
+    /// Measures the area near the island on its monitor; again whenever that monitor changes.
+    func place(notchSize: CGSize) {
+        guard let screen = IslandLayout.notchScreen else { return }
+        // The island with its wings, and 90 points either side and 70 below it.
+        let width = notchSize.width + IslandLayout.notchWing * 2 + 180
+        let height = notchSize.height + 70
+        nearRect = CGRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - height, width: width, height: height)
+        faceX = screen.frame.midX - notchSize.width / 2 - IslandLayout.notchWing / 2
     }
 
     func stopWatching() {
@@ -241,6 +245,7 @@ struct NotchEyes: View {
         .animation(.easeInOut(duration: 0.25), value: gaze)
         .onAppear { mood.startWatching(notchSize: layout.notchSize) }
         .onDisappear { mood.stopWatching() }
+        .onChange(of: layout.screenChanges) { mood.place(notchSize: layout.notchSize) }
         .task { await breathe() }
         .task { await blink() }
         .task { await glance() }
