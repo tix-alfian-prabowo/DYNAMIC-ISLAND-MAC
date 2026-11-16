@@ -726,7 +726,8 @@ class PokeService: ObservableObject {
     // MARK: Poking
 
     /// The Poke shortcut (⌃⌥P): pokes the friend picked last in the Poke tab (or the first one)
-    /// right away, without opening the notch, which only says something if it couldn't.
+    /// right away, without opening the notch. With nothing else on screen to show it went, the notch
+    /// says "Poked" and their name once it's sent, or why it couldn't.
     func pokePickedFriend() {
         let friend = selectedFriendID.flatMap { id in friends.first { $0.id == id } } ?? friends.first
         guard state == .ready, let friend else {
@@ -734,14 +735,15 @@ class PokeService: ObservableObject {
             notificationManager.postActivity(AppNotification(type: .poke, title: "Couldn't poke", body: reason))
             return
         }
-        poke(friend.id, name: friend.name, showsErrorOnNotch: true)
+        poke(friend.id, name: friend.name, showsErrorOnNotch: true, confirmsOnNotch: true)
     }
 
     /// Pokes a friend. The Poke tab marks the friend from the click until Supabase answers, and shows
     /// an error if it didn't go through; from elsewhere (a banner's Poke Back or Reply, the shortcut)
-    /// only a poke that didn't go through shows on the notch, since only pokes from others do.
+    /// only a poke that didn't go through shows on the notch, since only pokes from others do; the
+    /// shortcut also confirms one that went (`confirmsOnNotch`).
     /// With `image` (a JPEG from `PokeImage`), the picture is uploaded first.
-    func poke(_ friendID: UUID, name: String, message: String = "", image: Data? = nil, showsErrorOnNotch: Bool = false) {
+    func poke(_ friendID: UUID, name: String, message: String = "", image: Data? = nil, showsErrorOnNotch: Bool = false, confirmsOnNotch: Bool = false) {
         guard let client, let userID = profile?.id else { return }
         let message = Self.limited(message.trimmingCharacters(in: .whitespacesAndNewlines), to: 100)
         // A newer poke to the same friend keeps the mark until its own answer.
@@ -769,6 +771,9 @@ class PokeService: ObservableObject {
                 let sent: Poke = try await client.from("pokes").insert(NewPoke(recipientID: friendID, message: message, imagePath: imagePath), returning: .representation).select().single().execute().value
                 actionError = nil
                 addToHistory(sent, friendID: friendID)
+                if confirmsOnNotch {
+                    notificationManager.postActivity(AppNotification(type: .poke, title: "Poked \(name)", body: "Sent with shortcut"))
+                }
             } catch {
                 // Row level security turns down a poke to someone who removed you.
                 let description: String
