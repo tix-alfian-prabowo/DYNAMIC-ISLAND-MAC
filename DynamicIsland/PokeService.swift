@@ -790,6 +790,19 @@ class PokeService: ObservableObject {
         poke.senderID == profile?.id
     }
 
+    // MARK: Game
+
+    /// A Realtime channel on the Poke project, for the Game tab's duels; nil while Poke isn't
+    /// connected. Nothing is stored: duels only send messages.
+    func gameChannel(_ topic: String) -> RealtimeChannelV2? {
+        guard state == .ready else { return nil }
+        return client?.channel(topic)
+    }
+
+    func removeGameChannel(_ channel: RealtimeChannelV2) async {
+        await client?.removeChannel(channel)
+    }
+
     // MARK: Poking
 
     /// The Poke shortcut (⌃⌥P): pokes the friend picked last in the Poke tab (or the first one)

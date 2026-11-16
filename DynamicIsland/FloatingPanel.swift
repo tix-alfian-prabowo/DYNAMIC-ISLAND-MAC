@@ -11,6 +11,7 @@ enum NotchTab: String, CaseIterable {
     case poke = "Poke"
     case timer = "Timer"
     case vpn = "VPN"
+    case game = "Game"
 
     var icon: String {
         switch self {
@@ -20,12 +21,13 @@ enum NotchTab: String, CaseIterable {
         case .poke: return "hand.point.right.fill"
         case .timer: return "timer"
         case .vpn: return "lock.shield.fill"
+        case .game: return "gamecontroller.fill"
         }
     }
 
     /// Beside the pin and settings, right of the notch: the left side is full.
     var isBesideSettings: Bool {
-        self == .vpn
+        self == .vpn || self == .game
     }
 }
 
@@ -95,6 +97,8 @@ class IslandLayout: ObservableObject {
         case regular
         /// Taller for a YouTube video; below the tab bar it narrows to the video.
         case video
+        /// Taller for Notch Drop's wells, 20 blocks deep.
+        case game
     }
 
     /// Width of the black "wings" shown beside the physical notch while collapsed.
@@ -116,6 +120,10 @@ class IslandLayout: ObservableObject {
     static let videoBodyMargin: CGFloat = 10
     static var videoBodyWidth: CGFloat {
         (videoHeight * 16 / 9).rounded(.up) + videoBodyMargin * 2
+    }
+    /// The side of one block of Notch Drop's well.
+    static func gameBlock(wide: Bool) -> CGFloat {
+        wide ? 16 : 13
     }
     /// Opening and closing glide without overshoot.
     static let expandAnimation = Animation.spring(response: 0.4, dampingFraction: 1)
@@ -186,6 +194,9 @@ class IslandLayout: ObservableObject {
         case .video:
             return CGSize(width: width,
                           height: notchSize.height + Self.expandedTopPadding + Self.videoHeight + Self.expandedBottomPadding)
+        case .game:
+            return CGSize(width: width,
+                          height: notchSize.height + Self.expandedTopPadding + Self.gameBlock(wide: wide) * CGFloat(NotchDropGame.rows) + Self.expandedBottomPadding)
         }
     }
 
@@ -209,7 +220,7 @@ class IslandLayout: ObservableObject {
 
     /// The largest the open island gets, for the island view's fixed size inside the window.
     var notchLargestWindowSize: CGSize {
-        let sizes = [PanelStyle.regular, .video].flatMap { [size(of: $0, wide: false), size(of: $0, wide: true)] }
+        let sizes = [PanelStyle.regular, .video, .game].flatMap { [size(of: $0, wide: false), size(of: $0, wide: true)] }
         return Self.windowSize(for: CGSize(width: sizes.map(\.width).max() ?? 0, height: sizes.map(\.height).max() ?? 0))
     }
 

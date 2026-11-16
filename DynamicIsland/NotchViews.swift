@@ -408,6 +408,11 @@ private struct NotchBannerView: View {
             layout.selectedTab = .poke
             layout.expand()
             notificationManager.dismissBanner()
+        } else if notification.type == .game {
+            // A friend's challenge opens the Game tab, where it can be taken.
+            layout.selectedTab = .game
+            layout.expand()
+            notificationManager.dismissBanner()
         } else if notification.type == .claude && notification.url == nil && notification.appURL == nil {
             // The weekly limit's reminder opens the Nook, which shows the limits.
             layout.selectedTab = .nook
@@ -420,7 +425,11 @@ private struct NotchBannerView: View {
     }
 
     private func performAction() {
-        if let friendID = notification.pokeSenderID {
+        if notification.type == .game {
+            NotchDrop.shared.accept()
+            layout.selectedTab = .game
+            layout.expand()
+        } else if let friendID = notification.pokeSenderID {
             PokeService.shared.poke(friendID, name: senderName, showsErrorOnNotch: !showsPokeTab)
         } else {
             notification.open()
@@ -508,6 +517,7 @@ private func notificationTint(_ type: NotificationType, _ themeManager: ThemeMan
     case .timer: return timerColor
     case .poke: return pokeColor
     case .vpn: return vpnColor
+    case .game: return .pink
     default: return Color(themeManager.currentTheme.accentColor)
     }
 }
@@ -688,6 +698,8 @@ private struct NotchExpandedView: View {
                     VPNView()
                 case .timer:
                     TimerView()
+                case .game:
+                    NotchDropView()
                 }
             }
             .padding(.horizontal, IslandLayout.expandedHorizontalPadding)

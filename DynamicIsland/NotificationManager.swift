@@ -34,6 +34,8 @@ enum NotificationType: String, CaseIterable, Codable {
     case system, message, warning, reminder, network, app
     /// The island's own live activities (see `NotificationManager.postActivity`).
     case claude, meeting, power, audio, timer, poke, vpn
+    /// A friend's challenge to a Notch Drop duel (see NotchDrop).
+    case game
 
     /// A type this version doesn't have, like a due todo's from the removed Todo tab, loads as a
     /// reminder; otherwise one such alert would keep all the saved ones from loading.
@@ -57,6 +59,7 @@ enum NotificationType: String, CaseIterable, Codable {
         case .timer: return "timer"
         case .poke: return "hand.point.right.fill"
         case .vpn: return "lock.shield.fill"
+        case .game: return "gamecontroller.fill"
         }
     }
 

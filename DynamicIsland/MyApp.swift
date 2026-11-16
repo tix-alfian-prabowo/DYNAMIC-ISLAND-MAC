@@ -43,6 +43,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
+        // Friends' Notch Drop challenges arrive while Poke is connected, with the Game tab closed too.
+        NotchDrop.shared.showGame = { [islandLayout] in
+            islandLayout.selectedTab = .game
+            islandLayout.expand()
+        }
         themeManager.loadPreference()
         enableLaunchAtLoginOnFirstRun()
         shareMeetingsWithFriends()
