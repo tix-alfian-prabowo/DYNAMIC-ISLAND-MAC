@@ -143,7 +143,7 @@ class NotificationManager: ObservableObject {
         }
 
         // During a Focus it's only added to the feed, and so are the details of a banner just closed.
-        guard !FocusStatus.isActive, !wasJustClosed(bundleID) else { return }
+        guard !FocusStatus.isActive, !isPlayingGame, !wasJustClosed(bundleID) else { return }
         enqueueBanner(notification)
     }
 
@@ -159,6 +159,11 @@ class NotificationManager: ObservableObject {
     func postActivity(_ notification: AppNotification, keepInFeed: Bool = false, duringFocus: Bool = false) {
         if keepInFeed {
             add(notification)
+        }
+        // During a game it waits in the Alerts tab instead of dropping down.
+        if isPlayingGame {
+            if !keepInFeed { add(notification) }
+            return
         }
         guard duringFocus || !FocusStatus.isActive else { return }
         enqueueBanner(notification)
@@ -196,7 +201,7 @@ class NotificationManager: ObservableObject {
     func announce(appBundleID: String, appName: String) {
         let app = appBundleID.lowercased()
         // Apps that badge without notifying (like System Settings for updates) aren't announced.
-        guard !FocusStatus.isActive, !wasJustClosed(app),
+        guard !FocusStatus.isActive, !isPlayingGame, !wasJustClosed(app),
               notifyingApps?.contains(app) ?? true,
               unconfirmedBadgeRises[app, default: 0] < maxUnconfirmedBadgeRises else { return }
 
@@ -258,6 +263,24 @@ class NotificationManager: ObservableObject {
     func dismissBanner() {
         heldBannerID = nil
         showNextBanner()
+    }
+
+    /// A Notch Drop game is on: nothing drops down over it. Notifications go to the Alerts tab
+    /// instead, also what was showing or waiting when the game started.
+    private(set) var isPlayingGame = false
+
+    func setPlayingGame(_ playing: Bool) {
+        guard playing != isPlayingGame else { return }
+        isPlayingGame = playing
+        guard playing else { return }
+        let inFeed = Set(notifications.map(\.id))
+        for waiting in [banner].compactMap({ $0 }) + bannerQueue where !waiting.isPending && !inFeed.contains(waiting.id) {
+            add(waiting)
+        }
+        bannerQueue.removeAll()
+        heldBannerID = nil
+        bannerTimer?.cancel()
+        banner = nil
     }
 
     /// The banner's ×: puts away the banner and the ones waiting behind it, so the notch goes back

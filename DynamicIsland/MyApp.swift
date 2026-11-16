@@ -45,9 +45,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupMenuBar()
         // Friends' Notch Drop challenges arrive while Poke is connected, with the Game tab closed too.
         NotchDrop.shared.showGame = { [islandLayout] in
+            GameLibrary.shared.current = .notchDrop
             islandLayout.selectedTab = .game
             islandLayout.expand()
         }
+        NotchRush.shared.showGame = { [islandLayout] in
+            GameLibrary.shared.current = .notchRush
+            islandLayout.selectedTab = .game
+            islandLayout.expand()
+        }
+        // Friends' challenges arrive while Poke is connected, with the Game tab closed too.
+        _ = GameInvites.shared
         themeManager.loadPreference()
         enableLaunchAtLoginOnFirstRun()
         shareMeetingsWithFriends()

@@ -23,14 +23,6 @@ final class NotchDrop: ObservableObject {
         case finished(won: Bool?, reason: String)
     }
 
-    /// A challenge from a friend.
-    struct Invite: Equatable, Identifiable {
-        let id: String
-        let friend: PokeService.Friend
-        let seed: UInt64
-        let received: Date
-    }
-
     struct Record: Codable, Equatable {
         var wins = 0
         var losses = 0
@@ -54,13 +46,15 @@ final class NotchDrop: ObservableObject {
         let started: Date
     }
     static let clearDuration: TimeInterval = 0.4
-    @Published private(set) var phase = Phase.menu
+    @Published private(set) var phase = Phase.menu {
+        // Notifications wait in the Alerts tab while a game is on.
+        didSet { GameLibrary.updatePlaying() }
+    }
     @Published private(set) var isDuel = false
     @Published private(set) var opponent: PokeService.Friend?
     @Published private(set) var opponentCells: [UInt8] = []
     @Published private(set) var opponentScore = 0
     @Published private(set) var opponentRows = 0
-    @Published private(set) var invite: Invite?
     @Published private(set) var best = UserDefaults.standard.integer(forKey: NotchDrop.bestKey)
     /// Duels won and lost, by friend.
     @Published private(set) var records: [UUID: Record] = NotchDrop.loadRecords()
@@ -74,7 +68,6 @@ final class NotchDrop: ObservableObject {
     /// How often the well goes to the other player at most.
     private static let stateInterval: TimeInterval = 0.15
     /// A challenge nobody took is called off after this long.
-    private static let inviteTimeout: TimeInterval = 60
     /// Without a word from the other player for this long, they're gone.
     private static let silenceTimeout: TimeInterval = 15
 
@@ -87,9 +80,6 @@ final class NotchDrop: ObservableObject {
     private var countdownTask: Task<Void, Never>?
 
     // Duel
-    private var inbox: RealtimeChannelV2?
-    private var inboxUserID: UUID?
-    private var inboxTasks: [Task<Void, Never>] = []
     private var match: RealtimeChannelV2?
     private var matchID: String?
     private var matchTasks: [Task<Void, Never>] = []
@@ -98,17 +88,8 @@ final class NotchDrop: ObservableObject {
     private var lastStateSent: CFTimeInterval = 0
     private var lastHeard = Date()
     private var timeoutTask: Task<Void, Never>?
-    private var cancellables = Set<AnyCancellable>()
 
-    private init() {
-        // Challenges can come in while Poke is connected.
-        PokeService.shared.$state.combineLatest(PokeService.shared.$profile)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] state, profile in
-                self?.listenForChallenges(userID: state == .ready ? profile?.id : nil)
-            }
-            .store(in: &cancellables)
-    }
+    private init() {}
 
     /// While a game runs the open notch stays open: the pointer wandering off doesn't close it.
     var keepsPanelOpen: Bool {
@@ -309,7 +290,7 @@ final class NotchDrop: ObservableObject {
 
     /// Sends the challenge to the friend's channel and waits for them on the match's channel.
     func challenge(_ friend: PokeService.Friend) {
-        guard let me = PokeService.shared.profile else { return }
+        guard PokeService.shared.profile != nil else { return }
         backToMenu()
         let id = UUID().uuidString.lowercased()
         let seed = UInt64.random(in: 1...UInt64.max)
@@ -318,26 +299,18 @@ final class NotchDrop: ObservableObject {
             return
         }
         phase = .waiting("Waiting for \(friend.name)…")
-        log.info("Challenging a friend to a duel")
-        Task {
-            await sendToInbox(of: friend.id, event: "invite", [
-                "match": .string(id),
-                "from": .string(me.id.uuidString.lowercased()),
-                "seed": .string(String(seed)),
-            ])
-        }
+        GameInvites.shared.challenge(friend, to: .notchDrop, match: id, seed: seed)
         timeoutTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Self.inviteTimeout))
+            try? await Task.sleep(for: .seconds(GameInvites.timeout))
             guard !Task.isCancelled, let self, self.matchID == id, case .waiting = self.phase else { return }
-            await self.sendToInbox(of: friend.id, event: "cancel", ["match": .string(id)])
+            GameInvites.shared.cancelChallenge(match: id, to: friend)
             self.leaveMatch(notify: false)
             self.phase = .finished(won: nil, reason: "\(friend.name) didn't answer")
         }
     }
 
-    func accept() {
-        guard let invite else { return }
-        self.invite = nil
+    /// Joins a friend's challenge (see GameInvites.accept).
+    func accept(_ invite: GameInvites.Invite) {
         backToMenu()
         guard joinMatch(id: invite.id, seed: invite.seed, friend: invite.friend, isHost: false) else {
             phase = .finished(won: nil, reason: "Poke isn't connected")
@@ -350,16 +323,6 @@ final class NotchDrop: ObservableObject {
             guard !Task.isCancelled, let self, self.matchID == invite.id, case .waiting = self.phase else { return }
             self.leaveMatch(notify: true)
             self.phase = .finished(won: nil, reason: "Couldn't reach \(invite.friend.name)")
-        }
-    }
-
-    func decline() {
-        guard let invite else { return }
-        self.invite = nil
-        Task {
-            guard let channel = PokeService.shared.gameChannel("notch-drop:\(invite.id)") else { return }
-            try? await channel.httpSend(event: "decline", message: [:] as JSONObject)
-            await PokeService.shared.removeGameChannel(channel)
         }
     }
 
@@ -508,84 +471,6 @@ final class NotchDrop: ObservableObject {
             }
             await PokeService.shared.removeGameChannel(channel)
         }
-    }
-
-    // MARK: Challenges
-
-    /// Each player's own channel, where friends' challenges arrive.
-    private func listenForChallenges(userID: UUID?) {
-        guard userID != inboxUserID else { return }
-        inboxTasks.forEach { $0.cancel() }
-        inboxTasks = []
-        if let inbox {
-            Task { await PokeService.shared.removeGameChannel(inbox) }
-        }
-        inbox = nil
-        inboxUserID = userID
-        guard let userID, let channel = PokeService.shared.gameChannel(Self.inboxTopic(userID)) else { return }
-        inbox = channel
-        for event in ["invite", "cancel"] {
-            let stream = channel.broadcastStream(event: event)
-            inboxTasks.append(Task { [weak self] in
-                for await message in stream {
-                    self?.receivedChallenge(event, Self.payload(of: message))
-                }
-            })
-        }
-        inboxTasks.append(Task { [weak self] in
-            do {
-                try await channel.subscribeWithError()
-            } catch {
-                self?.log.error("Couldn't listen for duels: \(String(describing: error), privacy: .public)")
-            }
-        })
-    }
-
-    private func receivedChallenge(_ event: String, _ payload: JSONObject) {
-        guard let id = payload["match"]?.stringValue, UUID(uuidString: id) != nil else { return }
-        switch event {
-        case "invite":
-            // Only friends can challenge, by the name you know them by.
-            guard let from = payload["from"]?.stringValue.flatMap(UUID.init(uuidString:)),
-                  let friend = PokeService.shared.friends.first(where: { $0.id == from }),
-                  let seed = payload["seed"]?.stringValue.flatMap(UInt64.init) else { return }
-            invite = Invite(id: id, friend: friend, seed: seed, received: Date())
-            log.info("A friend challenged you to a duel")
-            let notification = AppNotification(type: .game, title: "\(friend.name) challenges you", body: "Notch Drop duel", actionTitle: "Play")
-            NotificationManager.shared.postActivity(notification)
-            // A challenge nobody took goes away with the challenger's.
-            Task { [weak self] in
-                try? await Task.sleep(for: .seconds(Self.inviteTimeout + 5))
-                if self?.invite?.id == id { self?.invite = nil }
-            }
-        case "cancel":
-            if invite?.id == id { invite = nil }
-        default:
-            break
-        }
-    }
-
-    /// To a friend's own channel, over HTTP: without joining it, so their other challenges stay theirs.
-    private func sendToInbox(of friendID: UUID, event: String, _ message: JSONObject) async {
-        guard let channel = PokeService.shared.gameChannel(Self.inboxTopic(friendID)) else { return }
-        do {
-            try await channel.httpSend(event: event, message: message)
-        } catch {
-            // Over the socket instead, joining the channel for a moment.
-            log.error("Couldn't send a duel message over HTTP, trying the socket: \(String(describing: error), privacy: .public)")
-            do {
-                try await channel.subscribeWithError()
-                await channel.broadcast(event: event, message: message)
-                try? await Task.sleep(for: .milliseconds(500))
-            } catch {
-                log.error("Couldn't send a duel message: \(String(describing: error), privacy: .public)")
-            }
-        }
-        await PokeService.shared.removeGameChannel(channel)
-    }
-
-    private static func inboxTopic(_ userID: UUID) -> String {
-        "notch-drop-inbox:\(userID.uuidString.lowercased())"
     }
 
     // MARK: Helpers

@@ -409,7 +409,8 @@ private struct NotchBannerView: View {
             layout.expand()
             notificationManager.dismissBanner()
         } else if notification.type == .game {
-            // A friend's challenge opens the Game tab, where it can be taken.
+            // A friend's challenge opens the Game tab on the game, where it can be taken.
+            GameLibrary.shared.current = GameInvites.shared.invite?.game ?? GameLibrary.shared.current
             layout.selectedTab = .game
             layout.expand()
             notificationManager.dismissBanner()
@@ -426,7 +427,7 @@ private struct NotchBannerView: View {
 
     private func performAction() {
         if notification.type == .game {
-            NotchDrop.shared.accept()
+            GameInvites.shared.accept()
             layout.selectedTab = .game
             layout.expand()
         } else if let friendID = notification.pokeSenderID {
@@ -699,7 +700,7 @@ private struct NotchExpandedView: View {
                 case .timer:
                     TimerView()
                 case .game:
-                    NotchDropView()
+                    GameTabView()
                 }
             }
             .padding(.horizontal, IslandLayout.expandedHorizontalPadding)
