@@ -168,6 +168,16 @@ class PokeService: ObservableObject {
     /// How often a connected app tells Supabase it's still online.
     private let lastSeenInterval: TimeInterval = 60
 
+    /// Why this Mac's user isn't at it now; while there's any, friends see them offline, though
+    /// the app stays connected and still gets pokes.
+    private enum AwayReason: String {
+        case asleep, displaysOff = "displays off", locked
+    }
+    private var awayReasons: Set<AwayReason> = []
+    private var isAway: Bool { !awayReasons.isEmpty }
+    private var sleepGate: SleepGate?
+    private var awayObservers: [NSObjectProtocol] = []
+
     /// A song playing: "Song — Artist", and Spotify's id for it when it plays in Spotify.
     nonisolated struct Song: Equatable, Sendable {
         let text: String
@@ -291,11 +301,68 @@ class PokeService: ObservableObject {
         }
         // The socket died while asleep; check for pokes as soon as the network is likely back.
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.setAway(false, because: .asleep) }
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(3))
                 self?.log.info("Woke from sleep, checking for pokes")
                 await self?.fetchMissed()
             }
+        }
+        watchAway()
+    }
+
+    /// A sleeping Mac, one with its displays off or its screen locked isn't being used: friends see
+    /// its user offline then. Without this a sleeping Mac stays online: the server keeps a
+    /// connection that went quiet for a while, and Power Nap wakes the Mac now and then, which
+    /// reconnects.
+    private func watchAway() {
+        // Sleep waits until friends were told, so it isn't lost with the network.
+        sleepGate = SleepGate { [weak self] done in
+            guard let self else { return done() }
+            self.setAway(true, because: .asleep, then: done)
+        }
+        let workspace = NSWorkspace.shared.notificationCenter
+        let distributed = DistributedNotificationCenter.default()
+        let watch: (NotificationCenter, Notification.Name, Bool, AwayReason) -> NSObjectProtocol = { center, name, away, reason in
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.setAway(away, because: reason) }
+            }
+        }
+        awayObservers = [
+            watch(workspace, NSWorkspace.screensDidSleepNotification, true, .displaysOff),
+            watch(workspace, NSWorkspace.screensDidWakeNotification, false, .displaysOff),
+            watch(distributed, Notification.Name("com.apple.screenIsLocked"), true, .locked),
+            watch(distributed, Notification.Name("com.apple.screenIsUnlocked"), false, .locked),
+        ]
+    }
+
+    /// Going away leaves the online channel (friends see the dot go and when you were last
+    /// online); coming back joins it again. `done` runs once friends were told, or right away.
+    private func setAway(_ away: Bool, because reason: AwayReason, then done: (() -> Void)? = nil) {
+        let wasAway = isAway
+        if away {
+            awayReasons.insert(reason)
+        } else {
+            awayReasons.remove(reason)
+        }
+        guard isAway != wasAway else {
+            done?()
+            return
+        }
+        log.info("\(away ? "Away" : "Back", privacy: .public) (\(reason.rawValue, privacy: .public)): \(away ? "offline" : "online", privacy: .public) for friends")
+        guard let presenceChannel, presenceChannel.status == .subscribed else {
+            done?()
+            return
+        }
+        if away {
+            Task {
+                await presenceChannel.untrack()
+                done?()
+            }
+        } else {
+            trackPresence()
+            Task { await sayStillOnline() }
+            done?()
         }
     }
 
@@ -491,7 +558,7 @@ class PokeService: ObservableObject {
     /// Tells Supabase this Mac is online now, so friends see when it was last online once it isn't.
     /// Only while the online channel is joined, so it matches the green dot friends see.
     private func sayStillOnline() async {
-        guard let client, state == .ready, presenceChannel?.status == .subscribed else { return }
+        guard !isAway, let client, state == .ready, presenceChannel?.status == .subscribed else { return }
         do {
             try await client.rpc("touch_last_seen").execute()
             lastOnline = Date()
@@ -530,7 +597,7 @@ class PokeService: ObservableObject {
 
     /// Says this app's state again, which friends' apps take as an update.
     private func trackPresence() {
-        guard let presenceChannel, presenceChannel.status == .subscribed, let userID = profile?.id else { return }
+        guard !isAway, let presenceChannel, presenceChannel.status == .subscribed, let userID = profile?.id else { return }
         let state = presenceState(userID: userID)
         Task { await presenceChannel.track(state: state) }
     }
@@ -859,7 +926,8 @@ class PokeService: ObservableObject {
     /// Every connected app joins one shared Realtime channel and says whose it is (only the user
     /// ID, which only friends can put a name to, whether they're in a meeting and the song they
     /// play, unless they turned that off). An app that
-    /// quits, sleeps or loses the network leaves it, so a friend in it is online.
+    /// quits or loses the network leaves it, and one on a Mac that sleeps, turns its displays off or
+    /// locks its screen stops saying it's there, so a friend in it is online.
     private func showOnline(client: SupabaseClient, userID: UUID) {
         presenceTasks.forEach { $0.cancel() }
         let channel = client.channel("poke-online")
@@ -869,8 +937,9 @@ class PokeService: ObservableObject {
         presenceTasks.append(Task { [weak self] in
             for await status in channel.statusChange {
                 if status == .subscribed {
-                    // Joining again, after a reconnect, needs saying so again.
-                    if let state = self?.presenceState(userID: userID) {
+                    // Joining again, after a reconnect, needs saying so again; not while away,
+                    // like when Power Nap wakes a sleeping Mac for a moment.
+                    if self?.isAway == false, let state = self?.presenceState(userID: userID) {
                         await channel.track(state: state)
                     }
                     await self?.sayStillOnline()
