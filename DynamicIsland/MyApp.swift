@@ -56,6 +56,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // Friends' challenges arrive while Poke is connected, with the Game tab closed too.
         _ = GameInvites.shared
+        // Your pet comes out of the notch.
+        PetWorld.shared.refresh()
         themeManager.loadPreference()
         enableLaunchAtLoginOnFirstRun()
         shareMeetingsWithFriends()

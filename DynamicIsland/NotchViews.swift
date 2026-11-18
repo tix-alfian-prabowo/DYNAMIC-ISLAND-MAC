@@ -414,6 +414,11 @@ private struct NotchBannerView: View {
             layout.selectedTab = .game
             layout.expand()
             notificationManager.dismissBanner()
+        } else if notification.type == .pet {
+            // A friend's invite opens the Pet tab, where it can be taken.
+            layout.selectedTab = .pet
+            layout.expand()
+            notificationManager.dismissBanner()
         } else if notification.type == .claude && notification.url == nil && notification.appURL == nil {
             // The weekly limit's reminder opens the Nook, which shows the limits.
             layout.selectedTab = .nook
@@ -430,6 +435,10 @@ private struct NotchBannerView: View {
             GameInvites.shared.accept()
             layout.selectedTab = .game
             layout.expand()
+        } else if notification.type == .pet {
+            if let friendID = notification.petFriendID, let friend = PokeService.shared.friends.first(where: { $0.id == friendID }) {
+                PetPlay.shared.join(friend)
+            }
         } else if let friendID = notification.pokeSenderID {
             PokeService.shared.poke(friendID, name: senderName, showsErrorOnNotch: !showsPokeTab)
         } else {
@@ -518,7 +527,7 @@ private func notificationTint(_ type: NotificationType, _ themeManager: ThemeMan
     case .timer: return timerColor
     case .poke: return pokeColor
     case .vpn: return vpnColor
-    case .game: return .pink
+    case .game, .pet: return .pink
     default: return Color(themeManager.currentTheme.accentColor)
     }
 }
@@ -701,6 +710,8 @@ private struct NotchExpandedView: View {
                     TimerView()
                 case .game:
                     GameTabView()
+                case .pet:
+                    PetTabView()
                 }
             }
             .padding(.horizontal, IslandLayout.expandedHorizontalPadding)
@@ -753,7 +764,7 @@ private struct NotchExpandedView: View {
 
             Spacer(minLength: layout.notchSize.width + 20)
 
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 ForEach(NotchTab.allCases.filter(\.isBesideSettings), id: \.self, content: tabButton)
                 WideButton()
                 PinButton()
@@ -775,8 +786,9 @@ private struct NotchExpandedView: View {
             HStack(spacing: 4) {
                 Image(systemName: tab.icon)
                     // Beside the pin and the gear, a tab's icon on its own is as big as theirs.
-                    .font(.system(size: tab.isBesideSettings && layout.selectedTab != tab ? 13 : 10, weight: .semibold))
-                if layout.selectedTab == tab {
+                    .font(.system(size: tab.isBesideSettings ? 13 : 10, weight: .semibold))
+                // Beside the settings there's only room for icons; the selected one is lit.
+                if layout.selectedTab == tab && !tab.isBesideSettings {
                     Text(tab.rawValue)
                         .font(.system(size: 11, weight: .semibold))
                 }
@@ -798,6 +810,7 @@ private struct NotchExpandedView: View {
             }
             .animation(.spring(response: 0.3, dampingFraction: 0.6), value: hasUnreadPokes)
         }
+        .help(tab.rawValue)
         .buttonStyle(.plain)
         .pointingHandCursor()
         .help(tab == .poke && hasUnreadPokes ? "Poke · new pokes" : tab.rawValue)
@@ -3337,6 +3350,7 @@ private struct PokeSetupView: View {
 private struct PokeNameView: View {
     @EnvironmentObject var poke: PokeService
     @State private var name = NSFullUserName().components(separatedBy: " ").first ?? ""
+    @State private var pet = PetStore.shared.look ?? PetLook(kind: .cat, coat: 0, name: PetKind.cat.defaultName)
 
     var body: some View {
         VStack(spacing: 8) {
@@ -3348,6 +3362,8 @@ private struct PokeNameView: View {
                 PokePill(title: "Save", prominent: true, action: save)
                     .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
             }
+            // And a pet to come along: it walks out of the notch onto the desktop.
+            PetChooser(look: $pet, compact: true)
             if let error = poke.actionError {
                 PokeError(message: error)
             }
@@ -3357,6 +3373,7 @@ private struct PokeNameView: View {
 
     private func save() {
         poke.setName(name)
+        PetStore.shared.adopt(pet)
     }
 }
 

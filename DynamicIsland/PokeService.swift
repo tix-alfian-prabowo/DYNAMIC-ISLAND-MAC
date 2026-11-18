@@ -210,6 +210,15 @@ class PokeService: ObservableObject {
             if playing != songs {
                 songs = playing
             }
+            var pets: [UUID: PetLook] = [:]
+            for presence in presences.values {
+                if let pet = presence.pet {
+                    pets[presence.userID] = pet
+                }
+            }
+            if pets != friendPets {
+                friendPets = pets
+            }
         }
     }
     private struct Presence {
@@ -218,7 +227,10 @@ class PokeService: ObservableObject {
         let userID: UUID
         let isInMeeting: Bool
         let song: Song?
+        let pet: PetLook?
     }
+    /// Online friends' pets, as their apps say (see PetStore).
+    @Published private(set) var friendPets: [UUID: PetLook] = [:]
     /// Whether this Mac's user is in a meeting now, told to friends through presence.
     @Published private(set) var isInMeeting = false
     /// The song playing on this Mac, told to friends while `sharesNowPlaying` is on.
@@ -595,6 +607,11 @@ class PokeService: ObservableObject {
         }
     }
 
+    /// Says this app's state again, like a new pet.
+    func refreshPresence() {
+        trackPresence()
+    }
+
     /// Says this app's state again, which friends' apps take as an update.
     private func trackPresence() {
         guard !isAway, let presenceChannel, presenceChannel.status == .subscribed, let userID = profile?.id else { return }
@@ -609,6 +626,11 @@ class PokeService: ObservableObject {
             if let uri = nowPlaying.spotifyURI {
                 state["song_uri"] = .string(uri)
             }
+        }
+        if let pet = PetStore.shared.look {
+            state["pet_kind"] = .string(pet.kind.rawValue)
+            state["pet_coat"] = .integer(pet.coat)
+            state["pet_name"] = .string(pet.name)
         }
         return state
     }
@@ -977,7 +999,11 @@ class PokeService: ObservableObject {
                         let text = presence.state["song"]?.stringValue.map { String($0.prefix(Self.songLimit)) } ?? ""
                         let uri = presence.state["song_uri"]?.stringValue.flatMap(SongPlayer.validSpotifyURI)
                         let song = text.isEmpty ? nil : Song(text: text, spotifyURI: uri)
-                        self?.presences[key] = Presence(ref: presence.ref, userID: id, isInMeeting: isInMeeting, song: song)
+                        let pet = presence.state["pet_kind"]?.stringValue.flatMap(PetKind.init(rawValue:)).map { kind in
+                            PetLook(kind: kind, coat: GameMessage.int(presence.state["pet_coat"]) ?? 0,
+                                    name: presence.state["pet_name"]?.stringValue.map { String($0.prefix(PetStore.nameLimit)) } ?? kind.defaultName)
+                        }
+                        self?.presences[key] = Presence(ref: presence.ref, userID: id, isInMeeting: isInMeeting, song: song, pet: pet)
                     }
                 }
                 self?.log.info("Online: \(self?.onlineUserIDs.count ?? 0) people")

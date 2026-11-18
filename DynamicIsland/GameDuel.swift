@@ -97,7 +97,7 @@ final class GameInvites: ObservableObject {
         inboxUserID = userID
         guard let userID, let channel = PokeService.shared.gameChannel(Self.inboxTopic(userID)) else { return }
         inbox = channel
-        for event in ["invite", "cancel"] {
+        for event in ["invite", "cancel", "pet_invite", "pet_cancel"] {
             let stream = channel.broadcastStream(event: event)
             inboxTasks.append(Task { [weak self] in
                 for await message in stream {
@@ -115,6 +115,11 @@ final class GameInvites: ObservableObject {
     }
 
     private func received(_ event: String, _ payload: JSONObject) {
+        // Invites to play with a friend's pet come the same way.
+        if event.hasPrefix("pet_") {
+            PetPlay.shared.receivedInbox(event, payload)
+            return
+        }
         guard let id = payload["match"]?.stringValue, UUID(uuidString: id) != nil else { return }
         switch event {
         case "invite":
@@ -137,6 +142,11 @@ final class GameInvites: ObservableObject {
         default:
             break
         }
+    }
+
+    /// Sends something else to a friend's inbox, like an invite to play with your pet.
+    func sendToInbox(_ event: String, to friendID: UUID, _ message: JSONObject) {
+        Task { await send(event, to: friendID, message) }
     }
 
     /// To a friend's own channel, over HTTP: without joining it, so their other challenges stay theirs.

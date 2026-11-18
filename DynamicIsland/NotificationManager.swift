@@ -26,6 +26,8 @@ struct AppNotification: Identifiable, Codable {
     /// The friend who poked (see PokeService); the banner's action pokes them back.
     var pokeSenderID: UUID? = nil
     var pokeSenderName: String? = nil
+    /// The friend who invited your pet to play (see PetPlay); the banner's action joins them.
+    var petFriendID: UUID? = nil
 
     var icon: String { symbol ?? type.icon }
 }
@@ -36,6 +38,8 @@ enum NotificationType: String, CaseIterable, Codable {
     case claude, meeting, power, audio, timer, poke, vpn
     /// A friend's challenge to a Notch Drop duel (see NotchDrop).
     case game
+    /// A friend's invite to play with their pet (see PetPlay).
+    case pet
 
     /// A type this version doesn't have, like a due todo's from the removed Todo tab, loads as a
     /// reminder; otherwise one such alert would keep all the saved ones from loading.
@@ -60,6 +64,7 @@ enum NotificationType: String, CaseIterable, Codable {
         case .poke: return "hand.point.right.fill"
         case .vpn: return "lock.shield.fill"
         case .game: return "gamecontroller.fill"
+        case .pet: return "pawprint.fill"
         }
     }
 

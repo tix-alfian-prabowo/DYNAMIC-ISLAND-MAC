@@ -12,6 +12,7 @@ enum NotchTab: String, CaseIterable {
     case timer = "Timer"
     case vpn = "VPN"
     case game = "Game"
+    case pet = "Pet"
 
     var icon: String {
         switch self {
@@ -22,12 +23,13 @@ enum NotchTab: String, CaseIterable {
         case .timer: return "timer"
         case .vpn: return "lock.shield.fill"
         case .game: return "gamecontroller.fill"
+        case .pet: return "pawprint.fill"
         }
     }
 
     /// Beside the pin and settings, right of the notch: the left side is full.
     var isBesideSettings: Bool {
-        self == .vpn || self == .game
+        self == .vpn || self == .game || self == .pet
     }
 }
 

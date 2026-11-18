@@ -1,0 +1,1094 @@
+import AppKit
+import Combine
+import Supabase
+import SwiftUI
+
+/// Your pet, kept on this Mac: friends learn it through Poke's online channel, nothing is stored
+/// in Supabase.
+final class PetStore: ObservableObject {
+    static let shared = PetStore()
+
+    @Published private(set) var look: PetLook?
+    /// Out on the desktop, or home in the notch.
+    @Published var isOut: Bool {
+        didSet {
+            UserDefaults.standard.set(isOut, forKey: Self.outKey)
+            PetWorld.shared.refresh()
+        }
+    }
+
+    private static let lookKey = "petLook"
+    private static let outKey = "petIsOut"
+    static let nameLimit = 16
+
+    private init() {
+        look = UserDefaults.standard.data(forKey: Self.lookKey).flatMap { try? JSONDecoder().decode(PetLook.self, from: $0) }
+        isOut = UserDefaults.standard.object(forKey: Self.outKey) as? Bool ?? true
+    }
+
+    /// Takes the pet (or changes it); an empty name becomes the kind's.
+    func adopt(_ look: PetLook) {
+        var look = look
+        look.name = String(look.name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.nameLimit))
+        if look.name.isEmpty {
+            look.name = look.kind.defaultName
+        }
+        guard look != self.look else { return }
+        self.look = look
+        if let data = try? JSONEncoder().encode(look) {
+            UserDefaults.standard.set(data, forKey: Self.lookKey)
+        }
+        PokeService.shared.refreshPresence()
+        PetWorld.shared.refresh()
+        PetPlay.shared.lookChanged()
+    }
+}
+
+/// A pet on the desktop, yours or a friend's visiting; its window shows it.
+final class PetActor: ObservableObject {
+    enum Bubble: String, Equatable {
+        case heart, sleep, surprise, say
+    }
+
+    let isMine: Bool
+    /// A friend's pet says whose it is under it.
+    let owner: String?
+    @Published var look: PetLook
+    @Published var pose = PetPose()
+    @Published var bubble: Bubble?
+    @Published var isHovered = false
+    @Published var carriesBall = false
+    /// Stars going round its head, after being shaken.
+    @Published var isDizzy = false
+    @Published var opacity: Double = 1
+    /// Where its feet are, in screen coordinates.
+    var position: CGPoint = .zero
+    var bubbleUntil: CFTimeInterval = 0
+    fileprivate var window: PetWindow?
+
+    init(look: PetLook, isMine: Bool, owner: String?) {
+        self.look = look
+        self.isMine = isMine
+        self.owner = owner
+    }
+
+    func say(_ bubble: Bubble, for seconds: Double, now: CFTimeInterval) {
+        self.bubble = bubble
+        bubbleUntil = now + seconds
+    }
+
+    /// The part of the screen it takes, for the pointer.
+    var bounds: CGRect {
+        let height = PetWorld.petHeight
+        return CGRect(x: position.x - height * 0.62, y: position.y - 2, width: height * 1.24, height: height + 4)
+    }
+}
+
+/// A small window of its own for each pet, moved as the pet goes; clicks pass through everywhere
+/// but the pet itself.
+private final class PetWindow: NSPanel {
+    static let size = CGSize(width: 170, height: 120)
+    /// Where the pet's feet are in the window, from its bottom left.
+    static let feet = CGPoint(x: 85, y: 16)
+
+    init(actor: PetActor, onMouse: @escaping (PetMouseView.Event) -> Void) {
+        super.init(contentRect: CGRect(origin: .zero, size: Self.size), styleMask: [.borderless, .nonactivatingPanel],
+                   backing: .buffered, defer: false)
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        level = .floating
+        collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        hidesOnDeactivate = false
+        isReleasedWhenClosed = false
+        ignoresMouseEvents = true
+        let mouse = PetMouseView(frame: CGRect(origin: .zero, size: Self.size), actor: actor, onMouse: onMouse)
+        let host = NSHostingView(rootView: PetSprite(actor: actor))
+        host.sizingOptions = []
+        host.frame = mouse.bounds
+        host.autoresizingMask = [.width, .height]
+        mouse.addSubview(host)
+        contentView = mouse
+    }
+
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+
+    /// Clicks go through it unless the pointer is on the pet.
+    func catchesClicks(_ catches: Bool) {
+        if ignoresMouseEvents == catches {
+            ignoresMouseEvents = !catches
+        }
+    }
+
+    func place(feet: CGPoint) {
+        setFrameOrigin(CGPoint(x: (feet.x - Self.feet.x).rounded(), y: (feet.y - Self.feet.y).rounded()))
+    }
+}
+
+/// Catches the clicks and drags on a pet, and lets everything else through.
+private final class PetMouseView: NSView {
+    enum Event {
+        case down, drag, up(moved: Bool)
+    }
+
+    private weak var actor: PetActor?
+    private let onMouse: (Event) -> Void
+    private var downAt: CGPoint?
+    private var moved = false
+
+    init(frame: CGRect, actor: PetActor, onMouse: @escaping (Event) -> Void) {
+        self.actor = actor
+        self.onMouse = onMouse
+        super.init(frame: frame)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let actor, let window else { return nil }
+        let onScreen = window.convertPoint(toScreen: convert(point, to: nil))
+        return actor.bounds.contains(onScreen) ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        downAt = NSEvent.mouseLocation
+        moved = false
+        onMouse(.down)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let downAt else { return }
+        let now = NSEvent.mouseLocation
+        if hypot(now.x - downAt.x, now.y - downAt.y) > 3 {
+            moved = true
+        }
+        if moved {
+            onMouse(.drag)
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        onMouse(.up(moved: moved))
+        downAt = nil
+    }
+}
+
+/// The pet, its bubble and, on a friend's, whose it is.
+private struct PetSprite: View {
+    @ObservedObject var actor: PetActor
+
+    var body: some View {
+        Canvas { context, size in
+            let height = PetWorld.petHeight
+            let feet = CGPoint(x: PetWindow.feet.x, y: size.height - PetWindow.feet.y)
+            drawPet(&context, look: actor.look, pose: actor.pose, feet: feet, height: height)
+            let ahead: CGFloat = actor.pose.facingRight ? 1 : -1
+            if actor.carriesBall {
+                let mouth = CGPoint(x: feet.x + ahead * height * 0.55, y: feet.y - height * (actor.pose.action == .sit ? 0.68 : 0.5))
+                drawPetBall(&context, center: mouth, radius: height * 0.12)
+            }
+            if actor.isDizzy {
+                // Little stars circling over its head.
+                let head = CGPoint(x: feet.x + ahead * height * 0.3, y: feet.y - height * 1.02)
+                for index in 0..<3 {
+                    let angle = actor.pose.time * 4 + Double(index) * .pi * 2 / 3
+                    let point = CGPoint(x: head.x + cos(angle) * height * 0.32, y: head.y + sin(angle) * height * 0.08)
+                    drawPetStar(&context, center: point, radius: height * 0.07, color: Color(red: 1, green: 0.85, blue: 0.3).opacity(0.6 + 0.4 * (sin(angle) + 1) / 2))
+                }
+            }
+            let low = actor.pose.action == .sleep
+            let top = CGPoint(x: feet.x + ahead * height * (low ? 0.3 : 0.32), y: feet.y - height * (low ? 0.62 : 1.08))
+            switch actor.bubble {
+            case .heart:
+                drawPetHeart(&context, center: CGPoint(x: top.x, y: top.y - 6), size: 11, color: Color(red: 1, green: 0.4, blue: 0.55))
+            case .sleep:
+                let drift = CGFloat(actor.pose.time.truncatingRemainder(dividingBy: 2.4))
+                for (index, size) in [7.0, 9.0].enumerated() {
+                    let rise = (drift + CGFloat(index) * 1.2).truncatingRemainder(dividingBy: 2.4)
+                    context.draw(Text("z").font(.system(size: size, weight: .bold, design: .rounded)).foregroundColor(.white.opacity(Double(1 - rise / 2.4))),
+                                 at: CGPoint(x: top.x + ahead * (4 + rise * 4), y: top.y - 2 - rise * 7))
+                }
+            case .surprise, .say:
+                let text = actor.bubble == .say ? actor.look.kind.sound : "!"
+                let resolved = context.resolve(Text(text).font(.system(size: 9, weight: .bold, design: .rounded)).foregroundColor(.black))
+                let textSize = resolved.measure(in: CGSize(width: 80, height: 20))
+                let rect = CGRect(x: top.x - textSize.width / 2 - 5, y: top.y - textSize.height - 6, width: textSize.width + 10, height: textSize.height + 4)
+                context.fill(Path(roundedRect: rect, cornerRadius: rect.height / 2), with: .color(.white))
+                context.draw(resolved, at: CGPoint(x: rect.midX, y: rect.midY))
+            case nil:
+                break
+            }
+            if let owner = actor.owner, actor.isHovered || actor.pose.action != .sleep {
+                label(&context, "\(owner)'s \(actor.look.name)", at: CGPoint(x: feet.x, y: feet.y + 8))
+            } else if actor.isHovered {
+                label(&context, actor.look.name, at: CGPoint(x: feet.x, y: feet.y + 8))
+            }
+        }
+        .opacity(actor.opacity)
+        .frame(width: PetWindow.size.width, height: PetWindow.size.height)
+    }
+
+    private func label(_ context: inout GraphicsContext, _ text: String, at point: CGPoint) {
+        let resolved = context.resolve(Text(text).font(.system(size: 8, weight: .semibold, design: .rounded)).foregroundColor(.white))
+        let size = resolved.measure(in: CGSize(width: 120, height: 14))
+        let rect = CGRect(x: point.x - size.width / 2 - 4, y: point.y - size.height / 2 - 1, width: size.width + 8, height: size.height + 2)
+        context.fill(Path(roundedRect: rect, cornerRadius: rect.height / 2), with: .color(.black.opacity(0.55)))
+        context.draw(resolved, at: point)
+    }
+}
+
+/// A small star, for a dizzy pet.
+func drawPetStar(_ context: inout GraphicsContext, center: CGPoint, radius: CGFloat, color: Color) {
+    var star = Path()
+    for point in 0..<10 {
+        let angle = Double(point) * .pi / 5 - .pi / 2
+        let reach = point % 2 == 0 ? radius : radius * 0.45
+        let corner = CGPoint(x: center.x + cos(angle) * reach, y: center.y + sin(angle) * reach)
+        if point == 0 { star.move(to: corner) } else { star.addLine(to: corner) }
+    }
+    star.closeSubpath()
+    context.fill(star, with: .color(color))
+}
+
+/// A ball to fetch.
+func drawPetBall(_ context: inout GraphicsContext, center: CGPoint, radius: CGFloat) {
+    let rect = CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
+    context.fill(Path(ellipseIn: rect), with: .color(Color(red: 0.86, green: 0.93, blue: 0.3)))
+    var seam = Path()
+    seam.addArc(center: CGPoint(x: center.x - radius * 1.1, y: center.y), radius: radius * 0.85, startAngle: .degrees(-50), endAngle: .degrees(50), clockwise: false)
+    seam.addArc(center: CGPoint(x: center.x + radius * 1.1, y: center.y), radius: radius * 0.85, startAngle: .degrees(130), endAngle: .degrees(230), clockwise: false)
+    context.stroke(seam, with: .color(.white.opacity(0.9)), lineWidth: max(radius * 0.18, 0.6))
+}
+
+private final class PetBallWindow: NSPanel {
+    static let size: CGFloat = 24
+
+    init() {
+        super.init(contentRect: CGRect(x: 0, y: 0, width: Self.size, height: Self.size), styleMask: [.borderless, .nonactivatingPanel],
+                   backing: .buffered, defer: false)
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        level = .floating
+        ignoresMouseEvents = true
+        collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        hidesOnDeactivate = false
+        isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: Canvas { context, size in
+            context.fill(Path(ellipseIn: CGRect(x: 4, y: size.height - 4, width: size.width - 8, height: 3)), with: .color(.black.opacity(0.25)))
+            drawPetBall(&context, center: CGPoint(x: size.width / 2, y: size.height / 2), radius: 5)
+        }.frame(width: Self.size, height: Self.size))
+        host.sizingOptions = []
+        contentView = host
+    }
+
+    override var canBecomeKey: Bool { false }
+}
+
+/// The pets on the desktop: yours wandering about and, while playing with a friend, theirs.
+/// Yours decides what it does here; a friend's goes where their Mac says (see PetPlay).
+final class PetWorld {
+    static let shared = PetWorld()
+    static let petHeight: CGFloat = 46
+
+    private(set) var mine: PetActor?
+    private(set) var friend: PetActor?
+
+    private enum Activity {
+        case arriving(from: CGPoint, to: CGPoint, start: CFTimeInterval)
+        case leaving(from: CGPoint, start: CFTimeInterval)
+        case idle(until: CFTimeInterval)
+        case walk(to: CGPoint, run: Bool)
+        case sit(until: CFTimeInterval)
+        case sleep(until: CFTimeInterval)
+        case held(grab: CGPoint)
+        /// Staggering about after being shaken.
+        case dizzy(until: CFTimeInterval)
+        /// Thrown: flying until it hits `ground`.
+        case flying(velocity: CGVector, ground: CGFloat)
+        /// Lying where it fell, seeing stars.
+        case dazed(until: CFTimeInterval)
+        case drop(from: CGPoint, to: CGPoint, start: CFTimeInterval)
+        case hop(start: CFTimeInterval)
+        case chase(until: CFTimeInterval)
+        case flee(until: CFTimeInterval)
+        case fetch
+        case carry(to: CGPoint, until: CFTimeInterval)
+    }
+
+    private struct Ball {
+        let id: String
+        let from: CGPoint
+        let to: CGPoint
+        let start: CFTimeInterval
+        var holder: String?
+        var droppedAt: CFTimeInterval?
+        var at: CGPoint
+        static let flight: CFTimeInterval = 1.1
+    }
+
+    private var activity = Activity.idle(until: 0)
+    /// Started when the current walk ends.
+    private var then: Activity?
+    private var timer: Timer?
+    private var lastTick: CFTimeInterval = 0
+    private var nextBlink: CFTimeInterval = 0
+    private var awakeSince: CFTimeInterval = 0
+    private var wasHovered = false
+    /// How hard it's being shaken while held: grows with each jerk of the pointer, fades on its own.
+    private var shake: Double = 0
+    private var lastHeldPointer: CGPoint?
+    private var lastHeldVelocity: CGVector = .zero
+    /// Shaken this much, it gets dizzy.
+    private static let dizzyShake: Double = 6
+    /// Let go while the pointer moves this fast (points a second), it's thrown.
+    private static let throwSpeed: CGFloat = 900
+
+    /// Each jerk of the pointer the other way adds to the shake, and so does distance; it fades.
+    private func measureShake(pointer: CGPoint, elapsed: Double) {
+        defer { lastHeldPointer = pointer }
+        guard let last = lastHeldPointer, elapsed > 0 else { return }
+        let velocity = CGVector(dx: (pointer.x - last.x) / elapsed, dy: (pointer.y - last.y) / elapsed)
+        let speed = hypot(velocity.dx, velocity.dy)
+        if speed > 200, velocity.dx * lastHeldVelocity.dx + velocity.dy * lastHeldVelocity.dy < 0 {
+            shake += 1
+        }
+        shake += Double(hypot(pointer.x - last.x, pointer.y - last.y)) / 500
+        shake *= exp(-elapsed * 0.5)
+        // Smoothed, for the throw.
+        let blend = min(elapsed * 18, 1)
+        lastHeldVelocity = CGVector(dx: lastHeldVelocity.dx + (velocity.dx - lastHeldVelocity.dx) * blend,
+                                    dy: lastHeldVelocity.dy + (velocity.dy - lastHeldVelocity.dy) * blend)
+    }
+    private var screenID: CGDirectDisplayID?
+    private var ball: Ball?
+    private var ballWindow: PetBallWindow?
+    /// Where a friend's pet is heading, from their last message.
+    private var friendTarget: CGPoint?
+    private var friendGoingHome: CFTimeInterval?
+
+    private init() {
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { PetWorld.shared.screensChanged() }
+        }
+    }
+
+    // MARK: Area
+
+    /// The pets keep to one screen: the notch's when yours came out.
+    private var screen: NSScreen? {
+        NSScreen.screens.first { $0.displayID == screenID } ?? IslandLayout.notchScreen ?? NSScreen.main
+    }
+
+    private var area: CGRect {
+        guard let screen else { return CGRect(x: 0, y: 0, width: 800, height: 600) }
+        let frame = screen.visibleFrame
+        return CGRect(x: frame.minX + 24, y: frame.minY + 6, width: frame.width - 48, height: frame.height - 48)
+    }
+
+    /// Just below the notch, where pets come out and go home.
+    private var notchDoor: CGPoint {
+        guard let screen else { return .zero }
+        let top = screen.safeAreaInsets.top > 0 ? screen.safeAreaInsets.top : NSStatusBar.system.thickness
+        return CGPoint(x: screen.frame.midX, y: screen.frame.maxY - top - Self.petHeight * 0.6)
+    }
+
+    /// Positions go between Macs as fractions of the area, since screens differ.
+    func normalized(_ point: CGPoint) -> CGPoint {
+        CGPoint(x: (point.x - area.minX) / max(area.width, 1), y: (point.y - area.minY) / max(area.height, 1))
+    }
+
+    func denormalized(_ point: CGPoint) -> CGPoint {
+        CGPoint(x: area.minX + point.x * area.width, y: area.minY + point.y * area.height)
+    }
+
+    private func clamped(_ point: CGPoint) -> CGPoint {
+        CGPoint(x: min(max(point.x, area.minX), area.maxX), y: min(max(point.y, area.minY), area.maxY))
+    }
+
+    private func screensChanged() {
+        guard mine != nil || friend != nil else { return }
+        if screen?.displayID != screenID {
+            screenID = IslandLayout.notchScreen?.displayID
+        }
+        if let mine {
+            mine.position = clamped(mine.position)
+        }
+    }
+
+    // MARK: Yours
+
+    /// Brings your pet out, or sends it home, as the Pet tab says.
+    func refresh() {
+        let store = PetStore.shared
+        if let look = store.look, store.isOut {
+            if let mine {
+                mine.look = look
+                if case .leaving = activity {
+                    // Called back before it got home.
+                    activity = .idle(until: now + 1)
+                    mine.opacity = 1
+                }
+            } else {
+                comeOut(look)
+            }
+        } else if mine != nil {
+            goHome()
+        }
+    }
+
+    private var now: CFTimeInterval { CACurrentMediaTime() }
+
+    private func comeOut(_ look: PetLook) {
+        screenID = IslandLayout.notchScreen?.displayID
+        let actor = PetActor(look: look, isMine: true, owner: nil)
+        actor.window = PetWindow(actor: actor) { [weak self] event in
+            MainActor.assumeIsolated { self?.mouse(event) }
+        }
+        mine = actor
+        let door = notchDoor
+        actor.position = door
+        let landing = clamped(CGPoint(x: door.x + .random(in: -90...90), y: area.maxY - .random(in: 30...80)))
+        activity = .arriving(from: door, to: landing, start: now)
+        then = nil
+        awakeSince = now
+        actor.window?.place(feet: door)
+        actor.window?.orderFrontRegardless()
+        startTimer()
+    }
+
+    private func goHome() {
+        guard let mine else { return }
+        if case .leaving = activity { return }
+        mine.carriesBall = false
+        let door = notchDoor
+        let below = CGPoint(x: door.x, y: min(area.maxY, door.y - 30))
+        activity = .walk(to: below, run: true)
+        then = .leaving(from: below, start: 0)
+    }
+
+    private func gone() {
+        mine?.window?.orderOut(nil)
+        mine?.window = nil
+        mine = nil
+        stopTimerIfIdle()
+    }
+
+    /// For PetPlay: what your pet is doing, to send.
+    var mineState: (position: CGPoint, action: PetPose.Action, facingRight: Bool, happy: Bool, bubble: PetActor.Bubble?, ball: Bool, dizzy: Bool)? {
+        guard let mine else { return nil }
+        return (normalized(mine.position), mine.pose.action, mine.pose.facingRight, mine.pose.isHappy, mine.bubble, mine.carriesBall, mine.isDizzy)
+    }
+
+    // MARK: A friend's
+
+    func showFriend(look: PetLook, owner: String) {
+        if let friend {
+            friend.look = look
+            return
+        }
+        let actor = PetActor(look: look, isMine: false, owner: owner)
+        actor.window = PetWindow(actor: actor) { [weak self] event in
+            MainActor.assumeIsolated { self?.friendMouse(event) }
+        }
+        actor.position = notchDoor
+        actor.pose.action = .jump
+        friend = actor
+        friendTarget = nil
+        friendGoingHome = nil
+        actor.window?.place(feet: actor.position)
+        actor.window?.orderFrontRegardless()
+        startTimer()
+    }
+
+    func updateFriend(position: CGPoint, action: PetPose.Action, facingRight: Bool, happy: Bool, bubble: PetActor.Bubble?, ball: Bool, dizzy: Bool) {
+        guard let friend, friendGoingHome == nil else { return }
+        friend.pose.isDizzy = dizzy
+        if friend.isDizzy != dizzy { friend.isDizzy = dizzy }
+        friendTarget = denormalized(position)
+        friend.pose.action = action
+        friend.pose.facingRight = facingRight
+        friend.pose.isHappy = happy
+        friend.pose.mouthOpen = bubble == .say
+        if friend.bubble != bubble { friend.bubble = bubble }
+        if friend.carriesBall != ball { friend.carriesBall = ball }
+    }
+
+    /// The friend's pet hops back into the notch and goes.
+    func removeFriend() {
+        guard friend != nil, friendGoingHome == nil else { return }
+        friendGoingHome = now
+        friendTarget = notchDoor
+        friend?.pose.action = .jump
+        friend?.carriesBall = false
+    }
+
+    // MARK: Playing together
+
+    /// The friend's pet is after yours: run.
+    func chased() {
+        guard mine != nil, isFree else { return }
+        mine?.say(.surprise, for: 0.8, now: now)
+        activity = .flee(until: now + .random(in: 3...4.5))
+        then = nil
+        startTimer()
+    }
+
+    /// Caught: stop running.
+    func tagged() {
+        guard case .flee = activity else { return }
+        activity = .hop(start: now)
+        mine?.say(.heart, for: 1.2, now: now)
+    }
+
+    /// Throws a ball from the notch to somewhere on the desktop; `target` is a fraction of the area.
+    func throwBall(id: String, target: CGPoint) {
+        ballWindow?.orderOut(nil)
+        let door = notchDoor
+        let to = clamped(denormalized(target))
+        ball = Ball(id: id, from: door, to: to, start: now, holder: nil, droppedAt: nil, at: door)
+        let window = ballWindow ?? PetBallWindow()
+        ballWindow = window
+        placeBall(door)
+        window.orderFrontRegardless()
+        if mine != nil, isFree || isFetchable {
+            activity = .fetch
+            then = nil
+        }
+        startTimer()
+    }
+
+    /// The friend's pet got the ball; if both got it at once, one of the two Macs gives way.
+    func friendTookBall(id: String) {
+        guard var ball, ball.id == id else { return }
+        if ball.holder == "me" {
+            guard PetPlay.shared.friendWinsTies else { return }
+            mine?.carriesBall = false
+            activity = .sit(until: now + 2.5)
+        }
+        ball.holder = "friend"
+        self.ball = ball
+        ballWindow?.orderOut(nil)
+        if case .fetch = activity {
+            activity = .sit(until: now + 2.5)
+            mine?.say(.surprise, for: 1, now: now)
+        }
+    }
+
+    // MARK: Pointer
+
+    private func mouse(_ event: PetMouseView.Event) {
+        guard let mine else { return }
+        switch event {
+        case .down:
+            break
+        case .drag:
+            let pointer = NSEvent.mouseLocation
+            if case .held(let grab) = activity {
+                mine.position = CGPoint(x: pointer.x - grab.x, y: pointer.y - grab.y)
+            } else {
+                activity = .held(grab: CGPoint(x: pointer.x - mine.position.x, y: pointer.y - mine.position.y))
+                then = nil
+                mine.say(.surprise, for: 0.8, now: now)
+            }
+        case .up(let moved):
+            if moved, case .held = activity {
+                let landing = clamped(CGPoint(x: mine.position.x, y: mine.position.y - 14))
+                let speed = hypot(lastHeldVelocity.dx, lastHeldVelocity.dy)
+                if speed > Self.throwSpeed {
+                    // Thrown: it flies off the way the pointer went, and comes down a bit lower.
+                    let velocity = CGVector(dx: lastHeldVelocity.dx * 0.9, dy: lastHeldVelocity.dy * 0.9)
+                    activity = .flying(velocity: velocity, ground: max(area.minY, mine.position.y - .random(in: 60...160)))
+                    then = nil
+                    mine.say(.surprise, for: 0.7, now: now)
+                } else {
+                    activity = .drop(from: mine.position, to: landing, start: now)
+                    if shake >= Self.dizzyShake {
+                        then = .dizzy(until: now + 4)
+                    }
+                }
+                lastHeldPointer = nil
+                lastHeldVelocity = .zero
+            } else if !moved {
+                clicked()
+            }
+        }
+        startTimer()
+    }
+
+    private func clicked() {
+        guard let mine else { return }
+        switch activity {
+        case .dazed, .dizzy, .flying:
+            // Too dizzy to answer.
+            mine.say(.surprise, for: 0.8, now: now)
+            return
+        default:
+            break
+        }
+        if case .sleep = activity {
+            mine.say(.surprise, for: 1, now: now)
+            awakeSince = now
+            activity = .idle(until: now + 1.5)
+        } else {
+            mine.say(.say, for: 1.1, now: now)
+            activity = .hop(start: now)
+        }
+        then = nil
+    }
+
+    /// A friend's pet is only petted: a heart, here only.
+    private func friendMouse(_ event: PetMouseView.Event) {
+        guard case .up(false) = event, let friend else { return }
+        friend.say(.heart, for: 1.2, now: now)
+    }
+
+    // MARK: Loop
+
+    private func startTimer(interval: TimeInterval = 1.0 / 30) {
+        if let timer, timer.timeInterval == interval { return }
+        timer?.invalidate()
+        if timer == nil { lastTick = now }
+        let timer = Timer(timeInterval: interval, repeats: true) { _ in
+            MainActor.assumeIsolated { PetWorld.shared.tick() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    /// Sitting or asleep alone, it only breathes: drawn less often.
+    private var isCalm: Bool {
+        guard friend == nil, ball == nil, mine?.isHovered != true else { return false }
+        switch activity {
+        case .sit, .sleep, .idle: return true
+        default: return false
+        }
+    }
+
+    private func stopTimerIfIdle() {
+        guard mine == nil, friend == nil, ball == nil else { return }
+        timer?.invalidate()
+        timer = nil
+    }
+
+    /// Doing something of its own, which playing can interrupt.
+    private var isFree: Bool {
+        switch activity {
+        case .arriving, .leaving, .held, .drop, .flying, .dazed: return false
+        case .walk where then.map({ if case .leaving = $0 { return true } else { return false } }) ?? false: return false
+        default: return true
+        }
+    }
+
+    private var isFetchable: Bool {
+        if case .carry = activity { return false }
+        return isFree
+    }
+
+    private func tick() {
+        let time = now
+        let elapsed = min(time - lastTick, 0.1)
+        lastTick = time
+        if let mine {
+            stepMine(mine, elapsed: elapsed, now: time)
+        }
+        if let friend {
+            stepFriend(friend, elapsed: elapsed, now: time)
+        }
+        stepBall(now: time)
+        stopTimerIfIdle()
+        if timer != nil {
+            startTimer(interval: isCalm ? 1.0 / 12 : 1.0 / 30)
+        }
+    }
+
+    private func stepMine(_ mine: PetActor, elapsed: Double, now: CFTimeInterval) {
+        var pose = mine.pose
+        pose.time += elapsed
+        let pointer = NSEvent.mouseLocation
+        let hovered = mine.bounds.contains(pointer)
+        if hovered != mine.isHovered { mine.isHovered = hovered }
+        var isHeld = false
+        if case .held = activity { isHeld = true }
+        mine.window?.catchesClicks(hovered || isHeld)
+        if hovered && !wasHovered, isFree, !isAsleep {
+            mine.say(.heart, for: 1.2, now: now)
+        }
+        wasHovered = hovered
+
+        var speed: CGFloat = 0
+        var target: CGPoint?
+        switch activity {
+        case .arriving(let from, let to, let start):
+            let progress = min((now - start) / 0.75, 1)
+            mine.position = arc(from: from, to: to, progress: progress, height: 40)
+            pose.action = .jump
+            pose.facingRight = to.x >= from.x
+            if progress >= 1 {
+                activity = .sit(until: now + 2)
+                mine.say(.say, for: 1, now: now)
+            }
+        case .leaving(let from, let start):
+            if start == 0 {
+                activity = .leaving(from: mine.position, start: now)
+                break
+            }
+            let progress = min((now - start) / 0.5, 1)
+            mine.position = arc(from: from, to: notchDoor, progress: progress, height: 24)
+            mine.opacity = 1 - max(progress - 0.6, 0) / 0.4
+            pose.action = .jump
+            if progress >= 1 {
+                gone()
+                return
+            }
+        case .idle(let until):
+            pose.action = .stand
+            // Looks round at the pointer when it's near.
+            if hypot(pointer.x - mine.position.x, pointer.y - mine.position.y) < 160 {
+                pose.facingRight = pointer.x >= mine.position.x
+            }
+            if now >= until { decide(now: now) }
+        case .walk(let to, let run):
+            target = to
+            speed = run ? 130 : 46
+            pose.action = run ? .run : .walk
+        case .sit(let until):
+            pose.action = .sit
+            if now >= until { decide(now: now) }
+        case .sleep(let until):
+            pose.action = .sleep
+            if mine.bubble != .sleep { mine.bubble = .sleep }
+            mine.bubbleUntil = now + 1
+            if now >= until {
+                mine.bubble = nil
+                awakeSince = now
+                activity = .sit(until: now + 2)
+            }
+        case .held(let grab):
+            mine.position = CGPoint(x: pointer.x - grab.x, y: pointer.y - grab.y)
+            pose.action = .held
+            pose.spin = 0
+            if pose.isDizzy || mine.isDizzy {
+                pose.isDizzy = false
+                mine.isDizzy = false
+            }
+            measureShake(pointer: pointer, elapsed: elapsed)
+            pose.isSqueezed = shake >= Self.dizzyShake * 0.5
+        case .flying(var velocity, let ground):
+            velocity.dy -= 2200 * elapsed
+            var point = CGPoint(x: mine.position.x + velocity.dx * elapsed, y: mine.position.y + velocity.dy * elapsed)
+            // Bounces off the screen's sides and top.
+            if point.x < area.minX || point.x > area.maxX {
+                velocity.dx = -velocity.dx * 0.6
+                point.x = min(max(point.x, area.minX), area.maxX)
+            }
+            if point.y > area.maxY {
+                velocity.dy = -abs(velocity.dy) * 0.5
+                point.y = area.maxY
+            }
+            pose.action = .jump
+            pose.facingRight = velocity.dx >= 0
+            pose.spin += Double(hypot(velocity.dx, velocity.dy)) * elapsed * 0.9
+            if point.y <= ground, velocity.dy < 0 {
+                // Down with a bump: hard enough, it lies there seeing stars.
+                point.y = ground
+                pose.spin = 0
+                if abs(velocity.dy) > 350 || shake >= Self.dizzyShake {
+                    activity = .dazed(until: now + 2.5)
+                    mine.isDizzy = true
+                    mine.bubble = nil
+                } else {
+                    activity = .sit(until: now + 2)
+                }
+                shake = 0
+            } else {
+                activity = .flying(velocity: velocity, ground: ground)
+            }
+            mine.position = point
+        case .dazed(let until):
+            pose.action = .sleep
+            pose.isDizzy = true
+            if now >= until {
+                // Gets up, still wobbly.
+                activity = .dizzy(until: now + 2.5)
+            }
+        case .dizzy(let until):
+            // Staggers a little this way and that, eyes spinning.
+            pose.action = .walk
+            pose.isDizzy = true
+            pose.isSqueezed = false
+            let wander = CGFloat(sin(now * 2.3)) * 14
+            mine.position = clamped(CGPoint(x: mine.position.x + wander * elapsed, y: mine.position.y + CGFloat(cos(now * 1.7)) * 6 * elapsed))
+            pose.facingRight = wander > 0
+            if now >= until {
+                pose.isDizzy = false
+                mine.isDizzy = false
+                shake = 0
+                activity = .sit(until: now + 3)
+            }
+        case .drop(let from, let to, let start):
+            let progress = min((now - start) / 0.3, 1)
+            mine.position = CGPoint(x: from.x + (to.x - from.x) * progress, y: from.y + (to.y - from.y) * progress * progress)
+            pose.action = .jump
+            if progress >= 1 {
+                mine.position = clamped(to)
+                pose.isSqueezed = false
+                if let next = then {
+                    activity = next
+                    then = nil
+                    if case .dizzy = next {
+                        mine.isDizzy = true
+                        mine.bubble = nil
+                    }
+                } else {
+                    shake = 0
+                    activity = .sit(until: now + 2)
+                }
+            }
+        case .hop(let start):
+            let progress = min((now - start) / 0.45, 1)
+            pose.action = progress < 1 ? .jump : .stand
+            let lift = sin(progress * .pi) * 14
+            mine.window?.place(feet: CGPoint(x: mine.position.x, y: mine.position.y + lift))
+            mine.pose = pose
+            if progress >= 1 { activity = .idle(until: now + 1.2) }
+            return
+        case .chase(let until):
+            if let friend, friendGoingHome == nil {
+                target = friend.position
+                speed = 120
+                pose.action = .run
+                if hypot(friend.position.x - mine.position.x, friend.position.y - mine.position.y) < Self.petHeight * 0.8 {
+                    PetPlay.shared.send("tag")
+                    mine.say(.heart, for: 1.5, now: now)
+                    activity = .sit(until: now + 3)
+                    target = nil
+                }
+            }
+            if now >= until { activity = .idle(until: now + 1) }
+        case .flee(let until):
+            pose.action = .run
+            if let friend {
+                let away = CGPoint(x: mine.position.x - friend.position.x, y: mine.position.y - friend.position.y)
+                let length = max(hypot(away.x, away.y), 1)
+                let wanted = clamped(CGPoint(x: mine.position.x + away.x / length * 80, y: mine.position.y + away.y / length * 80))
+                // Cornered: dash sideways instead.
+                target = hypot(wanted.x - mine.position.x, wanted.y - mine.position.y) < 20
+                    ? clamped(CGPoint(x: mine.position.x + (away.y >= 0 ? 80 : -80), y: mine.position.y - away.x / length * 80))
+                    : wanted
+                speed = 125
+            }
+            if now >= until {
+                // Its turn to chase, now and then.
+                if Bool.random(), friend != nil {
+                    PetPlay.shared.send("chase")
+                    activity = .chase(until: now + 4)
+                } else {
+                    activity = .idle(until: now + 1.5)
+                }
+            }
+        case .fetch:
+            guard let ball else {
+                activity = .idle(until: now + 1)
+                break
+            }
+            if ball.holder != nil {
+                activity = .sit(until: now + 2)
+                break
+            }
+            target = ball.to
+            speed = 140
+            pose.action = .run
+            let landed = now - ball.start >= Ball.flight
+            if landed, hypot(ball.to.x - mine.position.x, ball.to.y - mine.position.y) < 12 {
+                self.ball?.holder = "me"
+                ballWindow?.orderOut(nil)
+                mine.carriesBall = true
+                PetPlay.shared.send("got", ["id": .string(ball.id)])
+                let toward = clamped(CGPoint(x: pointer.x, y: pointer.y - 20))
+                activity = .carry(to: toward, until: now + 6)
+                target = nil
+            }
+        case .carry(let to, let until):
+            target = to
+            speed = 70
+            pose.action = .walk
+            if now >= until || hypot(to.x - mine.position.x, to.y - mine.position.y) < 6 {
+                dropBall(at: mine.position, facingRight: pose.facingRight)
+                mine.say(.heart, for: 1.5, now: now)
+                activity = .sit(until: now + 4)
+                target = nil
+            }
+        }
+
+        if let target, speed > 0 {
+            let dx = target.x - mine.position.x, dy = target.y - mine.position.y
+            let distance = hypot(dx, dy)
+            let step = speed * elapsed
+            if distance <= step {
+                mine.position = target
+                arrived(now: now)
+            } else {
+                mine.position.x += dx / distance * step
+                mine.position.y += dy / distance * step
+                if abs(dx) > 1 { pose.facingRight = dx > 0 }
+            }
+        }
+
+        // Blinks now and then; happy while the pointer is on it or with a heart up.
+        if now >= nextBlink {
+            pose.isBlinking = true
+            if now >= nextBlink + 0.13 {
+                pose.isBlinking = false
+                nextBlink = now + .random(in: 2...5)
+            }
+        }
+        pose.isHappy = hovered || mine.bubble == .heart
+        pose.mouthOpen = mine.bubble == .say || (pose.action == .run && mine.look.kind == .dog)
+        if mine.bubble != nil, mine.bubble != .sleep, now >= mine.bubbleUntil {
+            mine.bubble = nil
+        }
+        if pose != mine.pose { mine.pose = pose }
+        mine.window?.place(feet: mine.position)
+    }
+
+    private var isAsleep: Bool {
+        if case .sleep = activity { return true }
+        return false
+    }
+
+    private func arrived(now: CFTimeInterval) {
+        if let next = then {
+            activity = next
+            then = nil
+        } else {
+            decide(now: now)
+        }
+    }
+
+    /// Picks what to do next.
+    private func decide(now: CFTimeInterval) {
+        guard let mine else { return }
+        let roll = Double.random(in: 0..<1)
+        let awake = now - awakeSince
+        if let friend, friendGoingHome == nil, roll < 0.4 {
+            if friend.pose.action == .sleep {
+                // Curl up beside a sleeping friend.
+                activity = .walk(to: beside(friend.position), run: false)
+                then = .sleep(until: now + .random(in: 15...30))
+            } else if Bool.random() {
+                PetPlay.shared.send("chase")
+                mine.say(.say, for: 0.9, now: now)
+                activity = .chase(until: now + 4)
+            } else {
+                activity = .walk(to: beside(friend.position), run: false)
+                then = .sit(until: now + .random(in: 3...6))
+            }
+            return
+        }
+        let pointer = NSEvent.mouseLocation
+        switch roll {
+        case ..<0.42:
+            activity = .walk(to: wanderTarget(), run: false)
+        case ..<0.5:
+            activity = .walk(to: wanderTarget(), run: true)
+        case ..<0.58 where area.contains(pointer):
+            // Comes to see the pointer.
+            activity = .walk(to: clamped(CGPoint(x: pointer.x + .random(in: -30...30), y: pointer.y - 30)), run: false)
+            then = .sit(until: now + .random(in: 3...6))
+        case ..<0.78:
+            activity = .sit(until: now + .random(in: 4...10))
+        case ..<(awake > 120 ? 1 : 0.92):
+            activity = .idle(until: now + .random(in: 1.5...4))
+        default:
+            activity = .sleep(until: now + .random(in: 25...60))
+        }
+    }
+
+    private func wanderTarget() -> CGPoint {
+        guard let mine else { return area.center }
+        // Mostly not far, now and then across the screen.
+        if Double.random(in: 0..<1) < 0.25 {
+            return CGPoint(x: .random(in: area.minX...area.maxX), y: .random(in: area.minY...area.maxY))
+        }
+        return clamped(CGPoint(x: mine.position.x + .random(in: -260...260), y: mine.position.y + .random(in: -160...160)))
+    }
+
+    private func beside(_ point: CGPoint) -> CGPoint {
+        guard let mine else { return point }
+        return clamped(CGPoint(x: point.x + (mine.position.x < point.x ? -1 : 1) * Self.petHeight, y: point.y))
+    }
+
+    private func stepFriend(_ friend: PetActor, elapsed: Double, now: CFTimeInterval) {
+        friend.pose.time += elapsed
+        let hovered = friend.bounds.contains(NSEvent.mouseLocation)
+        if hovered != friend.isHovered { friend.isHovered = hovered }
+        friend.window?.catchesClicks(hovered)
+        if let target = friendTarget {
+            let pull = min(elapsed * (friendGoingHome != nil ? 6 : 7), 1)
+            friend.position.x += (target.x - friend.position.x) * pull
+            friend.position.y += (target.y - friend.position.y) * pull
+        }
+        if let leaving = friendGoingHome {
+            let progress = (now - leaving) / 0.7
+            friend.opacity = 1 - min(max(progress - 0.4, 0) / 0.6, 1)
+            if progress >= 1 {
+                friend.window?.orderOut(nil)
+                friend.window = nil
+                self.friend = nil
+                friendGoingHome = nil
+                return
+            }
+        }
+        if friend.bubble == .heart, friend.isMine == false, now >= friend.bubbleUntil, friend.bubbleUntil > 0 {
+            friend.bubble = nil
+            friend.bubbleUntil = 0
+        }
+        friend.window?.place(feet: friend.position)
+    }
+
+    private func stepBall(now: CFTimeInterval) {
+        guard let ball else { return }
+        if ball.holder == nil {
+            let progress = min((now - ball.start) / Ball.flight, 1)
+            // Up out of the notch and down, with a bounce at the end.
+            let main = min(progress / 0.8, 1)
+            var point = arc(from: ball.from, to: ball.to, progress: main, height: 90)
+            if progress > 0.8 {
+                point = CGPoint(x: ball.to.x, y: ball.to.y + sin((progress - 0.8) / 0.2 * .pi) * 10)
+            }
+            self.ball?.at = point
+            placeBall(point)
+        } else if let dropped = ball.droppedAt, now - dropped > 6 {
+            ballWindow?.orderOut(nil)
+            self.ball = nil
+        } else if ball.droppedAt == nil, ball.holder == "friend", now - ball.start > 30 {
+            self.ball = nil
+        }
+    }
+
+    private func dropBall(at point: CGPoint, facingRight: Bool) {
+        mine?.carriesBall = false
+        let spot = CGPoint(x: point.x + (facingRight ? 16 : -16), y: point.y)
+        ball?.droppedAt = now
+        ball?.at = spot
+        placeBall(spot)
+        ballWindow?.orderFrontRegardless()
+    }
+
+    private func placeBall(_ point: CGPoint) {
+        ballWindow?.setFrameOrigin(CGPoint(x: (point.x - PetBallWindow.size / 2).rounded(), y: point.y.rounded()))
+    }
+
+    private func arc(from: CGPoint, to: CGPoint, progress: Double, height: CGFloat) -> CGPoint {
+        CGPoint(x: from.x + (to.x - from.x) * progress,
+                y: from.y + (to.y - from.y) * progress + sin(progress * .pi) * height)
+    }
+}
+
+private extension CGRect {
+    var center: CGPoint { CGPoint(x: midX, y: midY) }
+}
