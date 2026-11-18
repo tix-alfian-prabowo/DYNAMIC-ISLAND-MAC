@@ -285,6 +285,7 @@ final class PetPlay: ObservableObject {
 
     /// Throws a ball for the pets: both chase it.
     func throwBall() {
+        guard PetWorld.shared.ballCount < PetWorld.maxBalls else { return }
         let id = UUID().uuidString.lowercased()
         let target = CGPoint(x: Double.random(in: 0.1...0.9), y: Double.random(in: 0.15...0.75))
         if PetStore.shared.look != nil, !PetStore.shared.isOut {

@@ -290,9 +290,12 @@ private final class PetBallWindow: NSPanel {
 
 /// The pets on the desktop: yours wandering about and, while playing with a friend, theirs.
 /// Yours decides what it does here; a friend's goes where their Mac says (see PetPlay).
-final class PetWorld {
+final class PetWorld: ObservableObject {
     static let shared = PetWorld()
     static let petHeight: CGFloat = 46
+    static let maxBalls = 10
+    /// Balls on the desktop now.
+    @Published private(set) var ballCount = 0
 
     private(set) var mine: PetActor?
     private(set) var friend: PetActor?
@@ -315,7 +318,7 @@ final class PetWorld {
         case hop(start: CFTimeInterval)
         case chase(until: CFTimeInterval)
         case flee(until: CFTimeInterval)
-        case fetch
+        case fetch(String)
         case carry(to: CGPoint, until: CFTimeInterval)
     }
 
@@ -325,8 +328,9 @@ final class PetWorld {
         let to: CGPoint
         let start: CFTimeInterval
         var holder: String?
+        /// When your pet brought it and put it down; it goes a little later.
         var droppedAt: CFTimeInterval?
-        var at: CGPoint
+        let window: PetBallWindow
         static let flight: CFTimeInterval = 1.1
     }
 
@@ -364,8 +368,9 @@ final class PetWorld {
                                     dy: lastHeldVelocity.dy + (velocity.dy - lastHeldVelocity.dy) * blend)
     }
     private var screenID: CGDirectDisplayID?
-    private var ball: Ball?
-    private var ballWindow: PetBallWindow?
+    private var balls: [Ball] = []
+    /// The ball your pet has in its mouth.
+    private var carried: String?
     /// Where a friend's pet is heading, from their last message.
     private var friendTarget: CGPoint?
     private var friendGoingHome: CFTimeInterval?
@@ -463,6 +468,7 @@ final class PetWorld {
     private func goHome() {
         guard let mine else { return }
         if case .leaving = activity { return }
+        if let carried { removeBall(carried) }
         mine.carriesBall = false
         let door = notchDoor
         let below = CGPoint(x: door.x, y: min(area.maxY, door.y - 30))
@@ -545,36 +551,67 @@ final class PetWorld {
     }
 
     /// Throws a ball from the notch to somewhere on the desktop; `target` is a fraction of the area.
+    /// At most ten are out at once: a friend's ball past that takes the oldest's place.
     func throwBall(id: String, target: CGPoint) {
-        ballWindow?.orderOut(nil)
+        guard !balls.contains(where: { $0.id == id }) else { return }
+        while balls.count >= Self.maxBalls, let oldest = balls.firstIndex(where: { $0.id != carried }) {
+            removeBall(balls[oldest].id)
+        }
         let door = notchDoor
-        let to = clamped(denormalized(target))
-        ball = Ball(id: id, from: door, to: to, start: now, holder: nil, droppedAt: nil, at: door)
-        let window = ballWindow ?? PetBallWindow()
-        ballWindow = window
-        placeBall(door)
+        let window = PetBallWindow()
+        balls.append(Ball(id: id, from: door, to: clamped(denormalized(target)), start: now, window: window))
+        ballCount = balls.count
+        placeBall(window, at: door)
         window.orderFrontRegardless()
-        if mine != nil, isFree || isFetchable {
-            activity = .fetch
+        if mine != nil, isFetchable, !isFetching {
+            activity = .fetch(id)
             then = nil
         }
         startTimer()
     }
 
-    /// The friend's pet got the ball; if both got it at once, one of the two Macs gives way.
+    /// The friend's pet got a ball; if both got it at once, one of the two Macs gives way.
     func friendTookBall(id: String) {
-        guard var ball, ball.id == id else { return }
-        if ball.holder == "me" {
+        guard let index = balls.firstIndex(where: { $0.id == id }) else { return }
+        if balls[index].holder == "me" {
             guard PetPlay.shared.friendWinsTies else { return }
-            mine?.carriesBall = false
-            activity = .sit(until: now + 2.5)
+            if carried == id {
+                mine?.carriesBall = false
+                carried = nil
+                activity = .sit(until: now + 2.5)
+            }
         }
-        ball.holder = "friend"
-        self.ball = ball
-        ballWindow?.orderOut(nil)
-        if case .fetch = activity {
-            activity = .sit(until: now + 2.5)
+        balls[index].holder = "friend"
+        balls[index].window.orderOut(nil)
+        if case .fetch(let fetching) = activity, fetching == id {
             mine?.say(.surprise, for: 1, now: now)
+            activity = nextFetch() ?? .sit(until: now + 2.5)
+        }
+    }
+
+    /// The nearest ball nobody has fetched yet.
+    private func nextFetch() -> Activity? {
+        guard let mine else { return nil }
+        return balls.filter { $0.holder == nil && $0.droppedAt == nil }
+            .min { hypot($0.to.x - mine.position.x, $0.to.y - mine.position.y) < hypot($1.to.x - mine.position.x, $1.to.y - mine.position.y) }
+            .map { .fetch($0.id) }
+    }
+
+    private var isFetching: Bool {
+        switch activity {
+        case .fetch, .carry: return true
+        default: return false
+        }
+    }
+
+    private func removeBall(_ id: String) {
+        guard let index = balls.firstIndex(where: { $0.id == id }) else { return }
+        balls[index].window.orderOut(nil)
+        balls.remove(at: index)
+        ballCount = balls.count
+        if carried == id {
+            carried = nil
+            mine?.carriesBall = false
         }
     }
 
@@ -661,7 +698,7 @@ final class PetWorld {
 
     /// Sitting or asleep alone, it only breathes: drawn less often.
     private var isCalm: Bool {
-        guard friend == nil, ball == nil, mine?.isHovered != true else { return false }
+        guard friend == nil, balls.isEmpty, mine?.isHovered != true else { return false }
         switch activity {
         case .sit, .sleep, .idle: return true
         default: return false
@@ -669,7 +706,7 @@ final class PetWorld {
     }
 
     private func stopTimerIfIdle() {
-        guard mine == nil, friend == nil, ball == nil else { return }
+        guard mine == nil, friend == nil, balls.isEmpty else { return }
         timer?.invalidate()
         timer = nil
     }
@@ -890,13 +927,9 @@ final class PetWorld {
                     activity = .idle(until: now + 1.5)
                 }
             }
-        case .fetch:
-            guard let ball else {
-                activity = .idle(until: now + 1)
-                break
-            }
-            if ball.holder != nil {
-                activity = .sit(until: now + 2)
+        case .fetch(let id):
+            guard let ball = balls.first(where: { $0.id == id }), ball.holder == nil, ball.droppedAt == nil else {
+                activity = nextFetch() ?? .sit(until: now + 2)
                 break
             }
             target = ball.to
@@ -904,8 +937,11 @@ final class PetWorld {
             pose.action = .run
             let landed = now - ball.start >= Ball.flight
             if landed, hypot(ball.to.x - mine.position.x, ball.to.y - mine.position.y) < 12 {
-                self.ball?.holder = "me"
-                ballWindow?.orderOut(nil)
+                if let index = balls.firstIndex(where: { $0.id == id }) {
+                    balls[index].holder = "me"
+                    balls[index].window.orderOut(nil)
+                }
+                carried = id
                 mine.carriesBall = true
                 PetPlay.shared.send("got", ["id": .string(ball.id)])
                 let toward = clamped(CGPoint(x: pointer.x, y: pointer.y - 20))
@@ -919,7 +955,12 @@ final class PetWorld {
             if now >= until || hypot(to.x - mine.position.x, to.y - mine.position.y) < 6 {
                 dropBall(at: mine.position, facingRight: pose.facingRight)
                 mine.say(.heart, for: 1.5, now: now)
-                activity = .sit(until: now + 4)
+                // More balls out there: off again after a moment.
+                if nextFetch() != nil {
+                    activity = .sit(until: now + 1.2)
+                } else {
+                    activity = .sit(until: now + 4)
+                }
                 target = nil
             }
         }
@@ -972,6 +1013,12 @@ final class PetWorld {
     /// Picks what to do next.
     private func decide(now: CFTimeInterval) {
         guard let mine else { return }
+        // Balls waiting come first.
+        if let fetch = nextFetch() {
+            activity = fetch
+            then = nil
+            return
+        }
         let roll = Double.random(in: 0..<1)
         let awake = now - awakeSince
         if let friend, friendGoingHome == nil, roll < 0.4 {
@@ -1051,36 +1098,38 @@ final class PetWorld {
     }
 
     private func stepBall(now: CFTimeInterval) {
-        guard let ball else { return }
-        if ball.holder == nil {
-            let progress = min((now - ball.start) / Ball.flight, 1)
-            // Up out of the notch and down, with a bounce at the end.
-            let main = min(progress / 0.8, 1)
-            var point = arc(from: ball.from, to: ball.to, progress: main, height: 90)
-            if progress > 0.8 {
-                point = CGPoint(x: ball.to.x, y: ball.to.y + sin((progress - 0.8) / 0.2 * .pi) * 10)
+        var gone: [String] = []
+        for ball in balls {
+            if ball.holder == nil, ball.droppedAt == nil {
+                let progress = min((now - ball.start) / Ball.flight, 1)
+                guard progress < 1 || ball.window.isVisible else { continue }
+                // Up out of the notch and down, with a bounce at the end.
+                var point = arc(from: ball.from, to: ball.to, progress: min(progress / 0.8, 1), height: 90)
+                if progress > 0.8 {
+                    point = CGPoint(x: ball.to.x, y: ball.to.y + sin((progress - 0.8) / 0.2 * .pi) * 10)
+                }
+                placeBall(ball.window, at: point)
+            } else if let dropped = ball.droppedAt, now - dropped > 8 {
+                gone.append(ball.id)
+            } else if ball.droppedAt == nil, ball.holder == "friend", now - ball.start > 30 {
+                gone.append(ball.id)
             }
-            self.ball?.at = point
-            placeBall(point)
-        } else if let dropped = ball.droppedAt, now - dropped > 6 {
-            ballWindow?.orderOut(nil)
-            self.ball = nil
-        } else if ball.droppedAt == nil, ball.holder == "friend", now - ball.start > 30 {
-            self.ball = nil
         }
+        gone.forEach(removeBall)
     }
 
     private func dropBall(at point: CGPoint, facingRight: Bool) {
         mine?.carriesBall = false
-        let spot = CGPoint(x: point.x + (facingRight ? 16 : -16), y: point.y)
-        ball?.droppedAt = now
-        ball?.at = spot
-        placeBall(spot)
-        ballWindow?.orderFrontRegardless()
+        guard let id = carried, let index = balls.firstIndex(where: { $0.id == id }) else { return }
+        carried = nil
+        let spot = CGPoint(x: point.x + (facingRight ? 1 : -1) * Self.petHeight * 0.5, y: point.y)
+        balls[index].droppedAt = now
+        placeBall(balls[index].window, at: spot)
+        balls[index].window.orderFrontRegardless()
     }
 
-    private func placeBall(_ point: CGPoint) {
-        ballWindow?.setFrameOrigin(CGPoint(x: (point.x - PetBallWindow.size / 2).rounded(), y: point.y.rounded()))
+    private func placeBall(_ window: PetBallWindow, at point: CGPoint) {
+        window.setFrameOrigin(CGPoint(x: (point.x - PetBallWindow.size / 2).rounded(), y: point.y.rounded()))
     }
 
     private func arc(from: CGPoint, to: CGPoint, progress: Double, height: CGFloat) -> CGPoint {

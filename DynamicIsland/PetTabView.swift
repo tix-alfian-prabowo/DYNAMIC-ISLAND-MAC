@@ -7,6 +7,7 @@ struct PetTabView: View {
     @EnvironmentObject var pokeService: PokeService
     @ObservedObject private var store = PetStore.shared
     @ObservedObject private var play = PetPlay.shared
+    @ObservedObject private var world = PetWorld.shared
     @State private var draft = PetLook(kind: .cat, coat: 0, name: PetKind.cat.defaultName)
     @State private var isEditing = false
 
@@ -49,11 +50,14 @@ struct PetTabView: View {
                     store.isOut.toggle()
                 }
                 .frame(width: 100)
-                DropButton(title: "Ball", systemImage: "tennisball.fill", height: 24) {
+                let isFull = world.ballCount >= PetWorld.maxBalls
+                DropButton(title: world.ballCount > 0 ? "Ball \(world.ballCount)/\(PetWorld.maxBalls)" : "Ball", systemImage: "tennisball.fill", height: 24) {
                     play.throwBall()
                 }
-                .frame(width: 70)
-                .help("Throw a ball from the notch for the pets to fetch")
+                .frame(width: 92)
+                .disabled(isFull)
+                .opacity(isFull ? 0.45 : 1)
+                .help(isFull ? "Ten balls are out: wait for the pets to bring some back" : "Throw a ball from the notch for the pets to fetch (up to \(PetWorld.maxBalls))")
                 DropButton(title: "Edit", height: 24) {
                     draft = look
                     isEditing = true
