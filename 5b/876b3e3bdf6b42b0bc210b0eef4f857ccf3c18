@@ -1,0 +1,57 @@
+DynamicIsland/NotificationManager.swift
+  s_8d4b63dc56ae38::t_e4e1f75889373e 29-30,41-42,67
+DynamicIsland/PokeService.swift
+  s_8d4b63dc56ae38::t_e4e1f75889373e 213-221,230,232-233,610-614,630-634,1002-1006
+DynamicIsland/NotchViews.swift
+  s_8d4b63dc56ae38::t_951787874c1038 417-421,438-441,530,713-714,767,789-791
+  s_8d4b63dc56ae38::t_b31c5f2592a68c 813,3353,3365-3366,3376
+DynamicIsland/PetTabView.swift
+  s_8d4b63dc56ae38::t_72a21fdfdaf27b 1-289
+README.md
+  s_8d4b63dc56ae38::t_1add3750cf30a0 36
+  s_8d4b63dc56ae38::t_36e09d19ba8e4d 35
+DynamicIsland/PetArt.swift
+  s_8d4b63dc56ae38::t_72503fceaacdfc 147-148
+  s_8d4b63dc56ae38::t_883648ce61ff69 106-107,116,120-126,428-430
+  s_8d4b63dc56ae38::t_24b1b22a243232 234,294,336-345
+  s_8d4b63dc56ae38::t_602850c860f5d2 1-101,108-115,127-146,149-233,235-293,295-302,324-335,346-348,359-427,431-473
+  s_8d4b63dc56ae38::t_4adfbdd45fdd37 102-105,117-119,303-323,349-358
+DynamicIsland/PetWorld.swift
+  s_8d4b63dc56ae38::t_bef43ffeda82b7 1-2,4-60,63-89,91,93-103,105-116,124-192,202-205,207-240,254-294,296-307,314-340,366-480,482,484-506,508,511-563,567,569,571,573-574,576-599,615-623,632-650,656-661,671-679,681-702,706-713,717-772,832-837,850-863,865-1021,1023-1028,1030-1094
+  s_8d4b63dc56ae38::t_cf86f5357939b1 3,564-566,568,570,572,575
+  s_8d4b63dc56ae38::t_dcfe833bf2d1ff 104
+  s_8d4b63dc56ae38::t_883648ce61ff69 310-313,347-365,481,483,507,509-510,600-611,614,680,780-817
+  s_8d4b63dc56ae38::t_6d31b089d6b274 624-631,773-777
+  s_8d4b63dc56ae38::t_4adfbdd45fdd37 61-62,193-201,241-253,308-309,341-346,612-613,778-779,818-831,838-849
+  s_8d4b63dc56ae38::t_68b80396e6a402 117-123,651-655,662-670,703-705,714-716,1029
+  s_8d4b63dc56ae38::t_63fa6e251bc463 864,1022
+  s_8d4b63dc56ae38::t_a7a8dee2787c5d 206
+  s_8d4b63dc56ae38::t_e1c93eb70c5eaa 90,92,295
+DynamicIsland/FloatingPanel.swift
+  s_8d4b63dc56ae38::t_e4e1f75889373e 15,26,32
+DynamicIsland/PetPlay.swift
+  s_8d4b63dc56ae38::t_dc5617ad401438 1-162,164-265,267-323,325-331
+  s_8d4b63dc56ae38::t_883648ce61ff69 266,324
+  s_8d4b63dc56ae38::t_e4e1f75889373e 163
+DynamicIsland/GameDuel.swift
+  s_8d4b63dc56ae38::t_e4e1f75889373e 100,118-122,147-149
+  s_8d4b63dc56ae38::t_ef9f1979b2a750 150-151
+DynamicIsland/MyApp.swift
+  s_8d4b63dc56ae38::t_e4e1f75889373e 59-60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "5b876b3e3bdf6b42b0bc210b0eef4f857ccf3c18",
+  "prompts": {},
+  "sessions": {
+    "s_8d4b63dc56ae38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e007752f-f59f-43f7-8009-9d3757d57f57",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Alfian Prabowo <103156797+fianprabowo@users.noreply.github.com>"
+    }
+  }
+}
