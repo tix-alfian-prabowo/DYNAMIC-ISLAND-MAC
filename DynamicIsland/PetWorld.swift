@@ -48,6 +48,10 @@ final class PetStore: ObservableObject {
 final class PetActor: ObservableObject {
     enum Bubble: String, Equatable {
         case heart, sleep, surprise, say
+        /// Nobody's played with it for a while: "…".
+        case bored
+        /// An empty bowl: time to eat.
+        case hungry
     }
 
     let isMine: Bool
@@ -81,6 +85,8 @@ final class PetActor: ObservableObject {
         switch bubble {
         case .say: PetSounds.shared.play(.talk, for: look, volume: isMine ? 1 : 0.7)
         case .surprise: PetSounds.shared.play(.surprise, for: look, volume: isMine ? 1 : 0.7)
+        case .bored: PetSounds.shared.play(.bored, for: look, volume: isMine ? 1 : 0.5)
+        case .hungry: PetSounds.shared.play(.hungry, for: look, volume: isMine ? 1 : 0.5)
         case .heart, .sleep: break
         }
     }
@@ -196,12 +202,12 @@ private struct PetSprite: View {
         Canvas { context, size in
             let height = actor.height
             let feet = CGPoint(x: PetWindow.feet.x, y: size.height - PetWindow.feet.y)
-            drawPet(&context, look: actor.look, pose: actor.pose, feet: feet, height: height)
-            let ahead: CGFloat = actor.pose.facingRight ? 1 : -1
+            var pose = actor.pose
             if actor.carriesBall {
-                let mouth = CGPoint(x: feet.x + ahead * height * 0.55, y: feet.y - height * (actor.pose.action == .sit ? 0.68 : 0.5))
-                drawPetBall(&context, center: mouth, radius: height * 0.12, color: PetBallColors.color(actor.ballColor))
+                pose.ball = PetBallColors.color(actor.ballColor)
             }
+            drawPet(&context, look: actor.look, pose: pose, feet: feet, height: height)
+            let ahead: CGFloat = actor.pose.facingRight ? 1 : -1
             if actor.isDizzy {
                 // Little stars circling over its head.
                 let head = CGPoint(x: feet.x + ahead * height * 0.3, y: feet.y - height * 1.02)
@@ -223,8 +229,13 @@ private struct PetSprite: View {
                     context.draw(Text("z").font(.system(size: size, weight: .bold, design: .rounded)).foregroundColor(.white.opacity(Double(1 - rise / 2.4))),
                                  at: CGPoint(x: top.x + ahead * (4 + rise * 4), y: top.y - 2 - rise * 7))
                 }
-            case .surprise, .say:
-                let text = actor.bubble == .say ? actor.look.kind.sound : "!"
+            case .hungry:
+                // An empty bowl, in a bubble.
+                let rect = CGRect(x: top.x - 13, y: top.y - 21, width: 26, height: 17)
+                context.fill(Path(roundedRect: rect, cornerRadius: 8), with: .color(.white))
+                drawPetBowl(&context, feet: CGPoint(x: rect.midX, y: rect.maxY - 3.5), width: 15, fill: 0)
+            case .surprise, .say, .bored:
+                let text = actor.bubble == .say ? actor.look.kind.sound : actor.bubble == .bored ? "…" : "!"
                 let resolved = context.resolve(Text(text).font(.system(size: 9, weight: .bold, design: .rounded)).foregroundColor(.black))
                 let textSize = resolved.measure(in: CGSize(width: 80, height: 20))
                 let rect = CGRect(x: top.x - textSize.width / 2 - 5, y: top.y - textSize.height - 6, width: textSize.width + 10, height: textSize.height + 4)
@@ -303,8 +314,95 @@ private final class PetBallWindow: NSPanel {
     override var canBecomeKey: Bool { false }
 }
 
+/// The food bowl put out by Feed: how much is left in it.
+final class PetBowl: ObservableObject {
+    @Published var fill: Double = 1
+    @Published var opacity: Double = 1
+}
+
+private final class PetBowlWindow: NSPanel {
+    static let size = CGSize(width: 48, height: 34)
+    /// Where its bottom middle is in the window, from the bottom left.
+    static let feet = CGPoint(x: 24, y: 6)
+
+    init(bowl: PetBowl) {
+        super.init(contentRect: CGRect(origin: .zero, size: Self.size), styleMask: [.borderless, .nonactivatingPanel],
+                   backing: .buffered, defer: false)
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        // Under the pets, like the basket.
+        level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue - 1)
+        collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        hidesOnDeactivate = false
+        isReleasedWhenClosed = false
+        ignoresMouseEvents = true
+        let host = NSHostingView(rootView: PetBowlView(bowl: bowl))
+        host.sizingOptions = []
+        contentView = host
+    }
+
+    override var canBecomeKey: Bool { false }
+
+    func place(feet: CGPoint) {
+        setFrameOrigin(CGPoint(x: (feet.x - Self.feet.x).rounded(), y: (feet.y - Self.feet.y).rounded()))
+    }
+}
+
+private struct PetBowlView: View {
+    @ObservedObject var bowl: PetBowl
+
+    var body: some View {
+        Canvas { context, size in
+            drawPetBowl(&context, feet: CGPoint(x: PetBowlWindow.feet.x, y: size.height - PetBowlWindow.feet.y), width: 30, fill: bowl.fill)
+        }
+        .opacity(bowl.opacity)
+        .frame(width: PetBowlWindow.size.width, height: PetBowlWindow.size.height)
+    }
+}
+
+/// A red food bowl standing on `feet`, heaped with kibble as far as `fill` says (0 is empty).
+func drawPetBowl(_ context: inout GraphicsContext, feet: CGPoint, width: CGFloat, fill: Double) {
+    var context = context
+    context.translateBy(x: feet.x, y: feet.y)
+    context.scaleBy(x: width / 30, y: width / 30)
+    let red = Color(red: 0.9, green: 0.33, blue: 0.33)
+    let rim = Color(red: 0.98, green: 0.55, blue: 0.5)
+    context.fill(Path(ellipseIn: CGRect(x: -16, y: -1.5, width: 32, height: 3.5)), with: .color(.black.opacity(0.22)))
+    // The kibble, heaped: nine pieces when full.
+    let pieces: [CGPoint] = [CGPoint(x: -8, y: -10.5), CGPoint(x: -3, y: -11), CGPoint(x: 2.5, y: -11), CGPoint(x: 8, y: -10.5),
+                             CGPoint(x: -5.5, y: -13.5), CGPoint(x: 0, y: -14), CGPoint(x: 5.5, y: -13.5),
+                             CGPoint(x: -2.5, y: -16.5), CGPoint(x: 3, y: -16.5)]
+    let shown = Int((min(max(fill, 0), 1) * Double(pieces.count)).rounded(.up))
+    let browns = [Color(red: 0.62, green: 0.38, blue: 0.2), Color(red: 0.72, green: 0.47, blue: 0.25), Color(red: 0.52, green: 0.3, blue: 0.16)]
+    for (index, piece) in pieces.prefix(shown).enumerated() {
+        context.fill(Path(ellipseIn: CGRect(x: piece.x - 2.6, y: piece.y - 2, width: 5.2, height: 4)), with: .color(browns[index % browns.count]))
+    }
+    // The bowl: wide at the top, narrow at the foot.
+    var body = Path()
+    body.move(to: CGPoint(x: -15, y: -10))
+    body.addLine(to: CGPoint(x: 15, y: -10))
+    body.addQuadCurve(to: CGPoint(x: 9, y: 0), control: CGPoint(x: 14, y: -1))
+    body.addLine(to: CGPoint(x: -9, y: 0))
+    body.addQuadCurve(to: CGPoint(x: -15, y: -10), control: CGPoint(x: -14, y: -1))
+    body.closeSubpath()
+    context.fill(body, with: .color(red))
+    context.fill(Path(roundedRect: CGRect(x: -15.5, y: -11.5, width: 31, height: 3.2), cornerRadius: 1.6), with: .color(rim))
+    // A little white bone on the front.
+    var bone = context
+    bone.translateBy(x: 0, y: -5)
+    bone.fill(Path(roundedRect: CGRect(x: -3.5, y: -0.7, width: 7, height: 1.4), cornerRadius: 0.7), with: .color(.white.opacity(0.9)))
+    for x in [-3.6, 3.6] as [CGFloat] {
+        for y in [-0.9, 0.9] as [CGFloat] {
+            bone.fill(Path(ellipseIn: CGRect(x: x - 1, y: y - 1, width: 2, height: 2)), with: .color(.white.opacity(0.9)))
+        }
+    }
+}
+
 /// The basket on the desktop: the balls in it, by color, and whether the pointer is on it.
 final class PetBasket: ObservableObject {
+    /// A friend's basket says whose it is.
+    var owner: String?
     @Published var balls: [Int] = []
     @Published var isHovered = false
     /// Squashes a little as a ball lands in it or it's put down: 0 to 1 and back.
@@ -362,7 +460,8 @@ private struct PetBasketView: View {
             drawPetBasket(&context, feet: feet, balls: basket.balls, squash: basket.bounce)
             if basket.isHovered {
                 let count = basket.balls.count
-                let text = count == 0 ? "Empty basket" : count == 1 ? "1 ball · click for it" : "\(count) balls · click for one"
+                let text = basket.owner.map { count == 0 ? "\($0)'s basket" : "\($0)'s basket · \(count) ball\(count == 1 ? "" : "s")" }
+                    ?? (count == 0 ? "Empty basket" : count == 1 ? "1 ball · click for it" : "\(count) balls · click for one")
                 let resolved = context.resolve(Text(text).font(.system(size: 8, weight: .semibold, design: .rounded)).foregroundColor(.white))
                 let textSize = resolved.measure(in: CGSize(width: 120, height: 14))
                 let point = CGPoint(x: feet.x, y: feet.y + 10)
@@ -457,6 +556,26 @@ final class PetWorld: ObservableObject {
         case flee(until: CFTimeInterval)
         case fetch(String)
         case carry(to: CGPoint, until: CFTimeInterval)
+        /// At the bowl, crunching; `until` 0 is just starting.
+        case eat(until: CFTimeInterval)
+        /// Head down to a ball on the ground, "hap!", and up again with it.
+        case bite(String, start: CFTimeInterval)
+        /// Lying down awake, resting, looking about.
+        case lie(until: CFTimeInterval)
+        /// A good stretch, front down and rear up; `until` 0 is just starting.
+        case stretch(until: CFTimeInterval)
+        /// Sitting, washing: a cat licks a paw, a dog scratches an ear.
+        case groom(until: CFTimeInterval)
+        /// A big yawn, sitting.
+        case yawn(until: CFTimeInterval)
+        /// Low and still but for its rear, about to pounce on `toward`; `until` 0 is just starting.
+        case crouch(until: CFTimeInterval, toward: CGPoint)
+        /// Bounding through the air.
+        case leap(from: CGPoint, to: CGPoint, start: CFTimeInterval, height: CGFloat)
+        /// Zoomies: tearing about from one spot to the next, `left` more to go.
+        case zoom(to: CGPoint, left: Int)
+        /// Ambling along nose to the ground.
+        case sniff(to: CGPoint)
     }
 
     private struct Ball {
@@ -487,6 +606,28 @@ final class PetWorld: ObservableObject {
     private var shownCursor: NSCursor?
     private var isPressing = false
     private var lastBallColor = -1
+    /// What it does next, in order, once the current thing's done: each made when it starts.
+    private var plan: [(CFTimeInterval) -> Activity] = []
+    /// When it next looks the other way, resting.
+    private var nextLook: CFTimeInterval = 0
+    /// A dog pants for a while after running about.
+    private var pantUntil: CFTimeInterval = 0
+
+    // Moods: hungry a while after its last meal, bored a while after anyone last played with it.
+    @Published private(set) var isHungry = false
+    @Published private(set) var isBored = false
+    @Published private(set) var isBowlOut = false
+    private var lastFed: Date
+    private var lastPlayedWith: CFTimeInterval = 0
+    /// When it may next say it's hungry or bored, or chat for no reason.
+    private var nextMoan: CFTimeInterval = 0
+    private var nextChatter: CFTimeInterval = 0
+    private var nextMunch: CFTimeInterval = 0
+    private var bowl: (window: PetBowlWindow, model: PetBowl, spot: CGPoint)?
+    private static let fedKey = "petLastFed"
+    static let hungerAfter: TimeInterval = 2.5 * 3600
+    private static let boredAfter: CFTimeInterval = 6 * 60
+    private static let eatingTime: CFTimeInterval = 4.5
 
     // The basket: out or put away, where it stands (its bottom middle, on the screen), what's in it.
     let basket = PetBasket()
@@ -496,6 +637,10 @@ final class PetWorld: ObservableObject {
     private var basketGrab: CGPoint?
     private var isPressingBasket = false
     private var basketBounceStart: CFTimeInterval?
+    /// A friend's basket, while playing: shown where it stands on their desktop, only to look at.
+    let friendBasket = PetBasket()
+    private var friendBasketWindow: PetBasketWindow?
+    private var friendBasketFeet: CGPoint?
     private static let basketOutKey = "petBasketIsOut"
     /// Where it stands, as a fraction of the area.
     private static let basketSpotKey = "petBasketSpot"
@@ -534,6 +679,7 @@ final class PetWorld: ObservableObject {
     private var friendGoingHome: CFTimeInterval?
 
     private init() {
+        lastFed = UserDefaults.standard.object(forKey: Self.fedKey) as? Date ?? Date()
         basketIsOut = UserDefaults.standard.bool(forKey: Self.basketOutKey)
         basket.balls = (UserDefaults.standard.array(forKey: Self.basketBallsKey) as? [Int]) ?? []
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { _ in
@@ -628,6 +774,9 @@ final class PetWorld: ObservableObject {
         activity = .arriving(from: door, to: landing, start: now)
         then = nil
         awakeSince = now
+        lastPlayedWith = now
+        nextMoan = now + 60
+        nextChatter = now + 90
         actor.window?.place(feet: door)
         actor.window?.orderFrontRegardless()
         startTimer()
@@ -638,6 +787,7 @@ final class PetWorld: ObservableObject {
         if case .leaving = activity { return }
         if let carried { removeBall(carried) }
         mine.carriesBall = false
+        plan = []
         let door = notchDoor
         let below = CGPoint(x: door.x, y: min(area.maxY, door.y - 30))
         activity = .walk(to: below, run: true)
@@ -645,6 +795,7 @@ final class PetWorld: ObservableObject {
     }
 
     private func gone() {
+        removeBowl()
         mine?.window?.orderOut(nil)
         mine?.window = nil
         mine = nil
@@ -652,9 +803,9 @@ final class PetWorld: ObservableObject {
     }
 
     /// For PetPlay: what your pet is doing, to send.
-    var mineState: (position: CGPoint, action: PetPose.Action, facingRight: Bool, happy: Bool, bubble: PetActor.Bubble?, ball: Bool, dizzy: Bool)? {
+    var mineState: (position: CGPoint, pose: PetPose, bubble: PetActor.Bubble?, ball: Bool, dizzy: Bool)? {
         guard let mine else { return nil }
-        return (normalized(mine.position), mine.pose.action, mine.pose.facingRight, mine.pose.isHappy, mine.bubble, mine.carriesBall, mine.isDizzy)
+        return (normalized(mine.position), mine.pose, mine.bubble, mine.carriesBall, mine.isDizzy)
     }
 
     // MARK: A friend's
@@ -678,8 +829,13 @@ final class PetWorld: ObservableObject {
         startTimer()
     }
 
-    func updateFriend(position: CGPoint, action: PetPose.Action, facingRight: Bool, happy: Bool, bubble: PetActor.Bubble?, ball: Bool, dizzy: Bool) {
+    func updateFriend(position: CGPoint, action: PetPose.Action, facingRight: Bool, happy: Bool, bubble: PetActor.Bubble?, ball: Bool, dizzy: Bool,
+                      dip: Double, flight: Double, tilt: Double, yawning: Bool) {
         guard let friend, friendGoingHome == nil else { return }
+        friend.pose.headDip = dip
+        friend.pose.flight = flight
+        friend.pose.tilt = tilt
+        friend.pose.isYawning = yawning
         friend.pose.isDizzy = dizzy
         if friend.isDizzy != dizzy { friend.isDizzy = dizzy }
         friendTarget = denormalized(position)
@@ -687,8 +843,13 @@ final class PetWorld: ObservableObject {
         friend.pose.facingRight = facingRight
         friend.pose.isHappy = happy
         friend.pose.mouthOpen = bubble == .say
-        if bubble == .say, friend.bubble != .say {
-            PetSounds.shared.play(.talk, for: friend.look, volume: 0.6)
+        if let bubble, friend.bubble != bubble {
+            switch bubble {
+            case .say: PetSounds.shared.play(.talk, for: friend.look, volume: 0.6)
+            case .hungry: PetSounds.shared.play(.hungry, for: friend.look, volume: 0.45)
+            case .bored: PetSounds.shared.play(.bored, for: friend.look, volume: 0.45)
+            case .heart, .sleep, .surprise: break
+            }
         }
         if friend.bubble != bubble { friend.bubble = bubble }
         if friend.carriesBall != ball { friend.carriesBall = ball }
@@ -696,6 +857,7 @@ final class PetWorld: ObservableObject {
 
     /// The friend's pet hops back into the notch and goes.
     func removeFriend() {
+        removeFriendBasket()
         guard friend != nil, friendGoingHome == nil else { return }
         friendGoingHome = now
         friendTarget = notchDoor
@@ -711,6 +873,7 @@ final class PetWorld: ObservableObject {
         mine?.say(.surprise, for: 0.8, now: now)
         activity = .flee(until: now + .random(in: 3...4.5))
         then = nil
+        plan = []
         startTimer()
     }
 
@@ -736,10 +899,12 @@ final class PetWorld: ObservableObject {
         ballCount = balls.count
         placeBall(window, at: start)
         PetSounds.shared.play(.pop, volume: 0.6)
+        noteAttention()
         window.orderFrontRegardless()
         if mine != nil, isFetchable, !isFetching {
             activity = .fetch(id)
             then = nil
+            plan = []
         }
         startTimer()
     }
@@ -758,7 +923,10 @@ final class PetWorld: ObservableObject {
         balls[index].holder = "friend"
         balls[index].window.orderOut(nil)
         friend?.ballColor = balls[index].color
-        if case .fetch(let fetching) = activity, fetching == id {
+        var wasAfterIt = false
+        if case .fetch(let fetching) = activity, fetching == id { wasAfterIt = true }
+        if case .bite(let biting, _) = activity, biting == id, carried != id { wasAfterIt = true }
+        if wasAfterIt {
             mine?.say(.surprise, for: 1, now: now)
             activity = nextFetch() ?? .sit(until: now + 2.5)
         }
@@ -784,7 +952,7 @@ final class PetWorld: ObservableObject {
 
     private var isFetching: Bool {
         switch activity {
-        case .fetch, .carry: return true
+        case .fetch, .bite, .carry: return true
         default: return false
         }
     }
@@ -800,11 +968,106 @@ final class PetWorld: ObservableObject {
         }
     }
 
+    // MARK: Food
+
+    /// Something happened with it: it isn't bored.
+    private func noteAttention() {
+        lastPlayedWith = now
+        if isBored { isBored = false }
+    }
+
+    /// Puts a bowl of food out beside your pet (bringing it out first); it runs over and eats.
+    func feed() {
+        noteAttention()
+        if PetStore.shared.look != nil, !PetStore.shared.isOut {
+            PetStore.shared.isOut = true
+        }
+        guard let mine, bowl == nil else { return }
+        let side: CGFloat = mine.position.x > area.midX ? -1 : 1
+        let spot = clamped(CGPoint(x: mine.position.x + side * (70 + mine.height), y: mine.position.y))
+        let model = PetBowl()
+        let window = PetBowlWindow(bowl: model)
+        window.place(feet: spot)
+        window.orderFrontRegardless()
+        bowl = (window, model, spot)
+        isBowlOut = true
+        PetSounds.shared.play(.pop, volume: 0.5)
+        // Drops what it's doing, unless it's in your hand or in the air.
+        if isFree, !isFetching {
+            activity = .walk(to: bowlSpot(spot, for: mine), run: true)
+            then = .eat(until: 0)
+            plan = []
+        }
+        startTimer()
+    }
+
+    /// Beside the bowl, facing it.
+    private func bowlSpot(_ spot: CGPoint, for pet: PetActor) -> CGPoint {
+        let side: CGFloat = pet.position.x < spot.x ? -1 : 1
+        return clamped(CGPoint(x: spot.x + side * (pet.height * 0.55 + 12), y: spot.y))
+    }
+
+    /// The bowl's empty: full and happy for the next few hours.
+    private func fed(_ mine: PetActor, now: CFTimeInterval) {
+        lastFed = Date()
+        UserDefaults.standard.set(lastFed, forKey: Self.fedKey)
+        isHungry = false
+        nextMoan = now + .random(in: 240...420)
+        removeBowl()
+        mine.say(.heart, for: 1.6, now: now)
+        PetSounds.shared.play(.happy, for: mine.look)
+        activity = .sit(until: now + 3)
+    }
+
+    private func removeBowl() {
+        bowl?.window.orderOut(nil)
+        bowl = nil
+        if isBowlOut { isBowlOut = false }
+    }
+
+    // MARK: A friend's basket
+
+    /// For PetPlay: your basket, if it's out: where (as a fraction of the area) and its balls.
+    var basketState: (spot: CGPoint, balls: [Int])? {
+        guard let feet = basketFeet else { return nil }
+        return (normalized(feet), basket.balls)
+    }
+
+    /// Shows a friend's basket where it stands on their desktop, or takes it away (`spot` nil).
+    func showFriendBasket(at spot: CGPoint?, balls: [Int], owner: String) {
+        guard let spot else {
+            removeFriendBasket()
+            return
+        }
+        let feet = clamped(denormalized(spot))
+        friendBasket.owner = owner
+        if friendBasket.balls != balls { friendBasket.balls = balls }
+        if friendBasketWindow == nil {
+            // Only to look at: clicks go through it.
+            let window = PetBasketWindow(basket: friendBasket, area: { nil }, onMouse: { _ in })
+            window.place(feet: feet)
+            window.orderFrontRegardless()
+            friendBasketWindow = window
+            startTimer()
+        } else if friendBasketFeet != feet {
+            friendBasketWindow?.place(feet: feet)
+        }
+        friendBasketFeet = feet
+    }
+
+    private func removeFriendBasket() {
+        friendBasketWindow?.orderOut(nil)
+        friendBasketWindow = nil
+        friendBasketFeet = nil
+        friendBasket.isHovered = false
+    }
+
     // MARK: Basket
 
     func toggleBasket() {
         basketIsOut.toggle()
         UserDefaults.standard.set(basketIsOut, forKey: Self.basketOutKey)
+        defer { PetPlay.shared.sendBasket() }
         if basketIsOut {
             openBasket()
         } else {
@@ -877,6 +1140,7 @@ final class PetWorld: ObservableObject {
             if moved {
                 let spot = normalized(feet)
                 UserDefaults.standard.set([Double(spot.x), Double(spot.y)], forKey: Self.basketSpotKey)
+                PetPlay.shared.sendBasket()
                 basketBounceStart = now
             } else {
                 throwFromBasket()
@@ -892,6 +1156,7 @@ final class PetWorld: ObservableObject {
         guard let feet = basketFeet, let color = basket.balls.last, ballCount < Self.maxBalls else { return }
         basket.balls.removeLast()
         saveBasketBalls()
+        PetPlay.shared.sendBasket()
         PetPlay.shared.throwBall(color: color, from: CGPoint(x: feet.x, y: feet.y + 26))
     }
 
@@ -908,6 +1173,10 @@ final class PetWorld: ObservableObject {
     }
 
     private func stepBasket(now: CFTimeInterval) {
+        if let feet = friendBasketFeet {
+            let hovered = CGRect(x: feet.x - 31, y: feet.y - 2, width: 62, height: 56).contains(NSEvent.mouseLocation)
+            if friendBasket.isHovered != hovered { friendBasket.isHovered = hovered }
+        }
         guard let bounds = basketBounds else { return }
         let hovered = bounds.contains(NSEvent.mouseLocation)
         if basket.isHovered != hovered { basket.isHovered = hovered }
@@ -924,11 +1193,13 @@ final class PetWorld: ObservableObject {
 
     private func mouse(_ event: PetMouseView.Event) {
         guard let mine else { return }
+        noteAttention()
         switch event {
         case .down:
             isPressing = true
         case .drag:
             isPressing = true
+            plan = []
             let pointer = NSEvent.mouseLocation
             if case .held(let grab) = activity {
                 mine.position = CGPoint(x: pointer.x - grab.x, y: pointer.y - grab.y)
@@ -974,10 +1245,12 @@ final class PetWorld: ObservableObject {
         default:
             break
         }
+        plan = []
         if case .sleep = activity {
+            // Woken: a start, then a stretch.
             mine.say(.surprise, for: 1, now: now)
             awakeSince = now
-            activity = .idle(until: now + 1.5)
+            activity = .stretch(until: 0)
         } else {
             mine.say(.say, for: 1.1, now: now)
             activity = .hop(start: now)
@@ -1012,7 +1285,7 @@ final class PetWorld: ObservableObject {
         if mine == nil, friend == nil, balls.isEmpty { return true }
         guard friend == nil, balls.isEmpty, mine?.isHovered != true else { return false }
         switch activity {
-        case .sit, .sleep, .idle: return true
+        case .sit, .sleep, .idle, .lie: return true
         default: return false
         }
     }
@@ -1043,7 +1316,7 @@ final class PetWorld: ObservableObject {
     }
 
     private func stopTimerIfIdle() {
-        guard mine == nil, friend == nil, balls.isEmpty, basketWindow == nil else { return }
+        guard mine == nil, friend == nil, balls.isEmpty, basketWindow == nil, friendBasketWindow == nil else { return }
         timer?.invalidate()
         timer = nil
     }
@@ -1051,7 +1324,7 @@ final class PetWorld: ObservableObject {
     /// Doing something of its own, which playing can interrupt.
     private var isFree: Bool {
         switch activity {
-        case .arriving, .leaving, .held, .drop, .flying, .dazed: return false
+        case .arriving, .leaving, .held, .drop, .flying, .dazed, .leap: return false
         case .walk where then.map({ if case .leaving = $0 { return true } else { return false } }) ?? false: return false
         default: return true
         }
@@ -1092,16 +1365,33 @@ final class PetWorld: ObservableObject {
         mine.window?.catchesClicks(hovered || isHeld)
         if hovered && !wasHovered, isFree, !isAsleep {
             mine.say(.heart, for: 1.2, now: now)
+            // A dog often bounces with joy when you come over.
+            if mine.look.kind == .dog, Double.random(in: 0..<1) < 0.35, !isFetching, bowl == nil {
+                activity = .hop(start: now)
+                plan = []
+            }
         }
+        if hovered {
+            noteAttention()
+        }
+        // How it feels: checked every frame, cheaply.
+        let hungry = Date().timeIntervalSince(lastFed) > Self.hungerAfter
+        if hungry != isHungry { isHungry = hungry }
+        let bored = !hungry && friend == nil && now - lastPlayedWith > Self.boredAfter
+        if bored != isBored { isBored = bored }
         wasHovered = hovered
 
         var speed: CGFloat = 0
         var target: CGPoint?
+        var chewing = false
+        pose.headDip = 0
         switch activity {
         case .arriving(let from, let to, let start):
             let progress = min((now - start) / 0.75, 1)
             mine.position = arc(from: from, to: to, progress: progress, height: 40)
-            pose.action = .jump
+            pose.action = .leap
+            pose.flight = progress
+            pose.tilt = (progress - 0.5) * 28
             pose.facingRight = to.x >= from.x
             if progress >= 1 {
                 activity = .sit(until: now + 2)
@@ -1133,15 +1423,18 @@ final class PetWorld: ObservableObject {
             pose.action = run ? .run : .walk
         case .sit(let until):
             pose.action = .sit
+            lookAround(&pose, now: now)
             if now >= until { decide(now: now) }
         case .sleep(let until):
             pose.action = .sleep
             if mine.bubble != .sleep { mine.bubble = .sleep }
             mine.bubbleUntil = now + 1
             if now >= until {
+                // Wakes up: a long stretch, sometimes a yawn.
                 mine.bubble = nil
                 awakeSince = now
-                activity = .sit(until: now + 2)
+                activity = .stretch(until: 0)
+                plan = Bool.random() ? [{ .yawn(until: $0 + 1.4) }] : []
             }
         case .held(let grab):
             mine.position = CGPoint(x: pointer.x - grab.x, y: pointer.y - grab.y)
@@ -1273,24 +1566,109 @@ final class PetWorld: ObservableObject {
                 activity = nextFetch() ?? .sit(until: now + 2)
                 break
             }
-            target = ball.to
+            // Stops with its mouth over the ball, not its feet on it.
+            let side: CGFloat = ball.to.x >= mine.position.x ? 1 : -1
+            let spot = CGPoint(x: ball.to.x - side * mine.height * 0.62, y: ball.to.y)
+            target = spot
             speed = 140
             pose.action = .run
             let landed = now - ball.start >= Ball.flight
-            if landed, hypot(ball.to.x - mine.position.x, ball.to.y - mine.position.y) < 12 {
-                if let index = balls.firstIndex(where: { $0.id == id }) {
-                    balls[index].holder = "me"
-                    balls[index].window.orderOut(nil)
+            if landed, hypot(spot.x - mine.position.x, spot.y - mine.position.y) < 10 {
+                pose.facingRight = side > 0
+                activity = .bite(id, start: now)
+                target = nil
+            }
+        case .bite(let id, let start):
+            let progress = (now - start) / 0.55
+            let smooth = { (x: Double) -> Double in
+                let x = min(max(x, 0), 1)
+                return x * x * (3 - 2 * x)
+            }
+            pose.action = .stand
+            if let ball = balls.first(where: { $0.id == id }), ball.holder == nil {
+                pose.facingRight = ball.to.x >= mine.position.x
+            }
+            // Down with its mouth open, "hap!", and back up with it.
+            pose.headDip = progress < 0.45 ? smooth(progress / 0.45) : 1 - smooth((progress - 0.45) / 0.55)
+            chewing = progress < 0.4
+            if progress >= 0.4, carried != id {
+                guard let index = balls.firstIndex(where: { $0.id == id }), balls[index].holder == nil else {
+                    // Gone, or the friend's pet got it first.
+                    activity = nextFetch() ?? .sit(until: now + 2)
+                    break
                 }
+                balls[index].holder = "me"
+                balls[index].window.orderOut(nil)
                 carried = id
-                mine.ballColor = ball.color
+                mine.ballColor = balls[index].color
                 mine.carriesBall = true
-                PetPlay.shared.send("got", ["id": .string(ball.id)])
+                PetPlay.shared.send("got", ["id": .string(id)])
+                PetSounds.shared.play(.chomp, for: mine.look, volume: 0.8)
+            }
+            if progress >= 1 {
+                pose.headDip = 0
                 // To the basket when it's out, or else to you.
                 let toward = clamped(CGPoint(x: pointer.x, y: pointer.y - 20))
                 activity = .carry(to: toward, until: now + (basketFeet != nil ? 15 : 6))
-                target = nil
             }
+        case .eat:
+            break
+        case .lie(let until):
+            pose.action = .lie
+            lookAround(&pose, now: now)
+            if now >= until { decide(now: now) }
+        case .stretch(let until):
+            if until == 0 {
+                activity = .stretch(until: now + .random(in: 1.6...2.4))
+            }
+            pose.action = .stretch
+            pose.isHappy = true
+            if until > 0, now >= until { decide(now: now) }
+        case .groom(let until):
+            pose.action = .groom
+            if now >= until { decide(now: now) }
+        case .yawn(let until):
+            pose.action = .sit
+            pose.isYawning = true
+            if now >= until {
+                pose.isYawning = false
+                decide(now: now)
+            }
+        case .crouch(let until, let toward):
+            if until == 0 {
+                activity = .crouch(until: now + .random(in: 0.7...1.4), toward: toward)
+            }
+            pose.action = .crouch
+            pose.facingRight = toward.x >= mine.position.x
+            if until > 0, now >= until {
+                // Pounce!
+                let distance = hypot(toward.x - mine.position.x, toward.y - mine.position.y)
+                activity = .leap(from: mine.position, to: clamped(toward), start: now, height: 24 + distance * 0.18)
+            }
+        case .leap(let from, let to, let start, let height):
+            let distance = hypot(to.x - from.x, to.y - from.y)
+            let progress = min((now - start) / min(0.32 + Double(distance) / 700, 0.8), 1)
+            mine.position = arc(from: from, to: to, progress: progress, height: height)
+            pose.action = .leap
+            pose.flight = progress
+            pose.tilt = (progress - 0.5) * 28
+            pose.facingRight = to.x >= from.x
+            if progress >= 1 {
+                pose.tilt = 0
+                pose.flight = 0
+                arrived(now: now)
+            }
+        case .zoom(let to, _):
+            target = to
+            speed = 230
+            pose.action = .run
+            pose.isHappy = true
+        case .sniff(let to):
+            target = to
+            speed = 24
+            pose.action = .walk
+            // Nose to the ground, following a smell.
+            pose.headDip = 0.62 + sin(now * 5) * 0.1
         case .carry(let to, let until):
             let basketSpot = basketSpot(for: mine)
             let goal = basketSpot ?? to
@@ -1317,6 +1695,28 @@ final class PetWorld: ObservableObject {
             }
         }
 
+        if case .eat(let until) = activity {
+            if until == 0 {
+                // Starts on what's left in the bowl.
+                activity = .eat(until: now + Self.eatingTime * max(bowl?.model.fill ?? 1, 0.2))
+            } else if let bowl {
+                pose.action = .stand
+                pose.facingRight = bowl.spot.x > mine.position.x
+                let left = max((until - now) / Self.eatingTime, 0)
+                if bowl.model.fill != left { bowl.model.fill = left }
+                chewing = sin(now * 12) > 0
+                if now >= nextMunch {
+                    PetSounds.shared.play(.munch, for: mine.look, volume: 0.7)
+                    nextMunch = now + 0.55
+                }
+                if now >= until {
+                    fed(mine, now: now)
+                }
+            } else {
+                activity = .sit(until: now + 2)
+            }
+        }
+
         if let target, speed > 0 {
             let dx = target.x - mine.position.x, dy = target.y - mine.position.y
             let distance = hypot(dx, dy)
@@ -1340,7 +1740,13 @@ final class PetWorld: ObservableObject {
             }
         }
         pose.isHappy = hovered || mine.bubble == .heart
-        pose.mouthOpen = mine.bubble == .say || (pose.action == .run && mine.look.kind == .dog)
+        let panting = mine.look.kind == .dog && (pose.action == .run || now < pantUntil)
+        pose.mouthOpen = chewing || (!mine.carriesBall && (mine.bubble == .say || mine.bubble == .hungry || panting))
+        if case .yawn = activity {} else { pose.isYawning = false }
+        if pose.action != .leap {
+            pose.tilt = 0
+            pose.flight = 0
+        }
         if mine.bubble != nil, mine.bubble != .sleep, now >= mine.bubbleUntil {
             mine.bubble = nil
         }
@@ -1354,6 +1760,26 @@ final class PetWorld: ObservableObject {
     }
 
     private func arrived(now: CFTimeInterval) {
+        guard let mine else { return }
+        if case .zoom(_, let left) = activity {
+            guard left > 0 else {
+                // Done: flops down, panting.
+                pantUntil = now + 8
+                activity = Bool.random() ? .lie(until: now + .random(in: 6...12)) : .sit(until: now + .random(in: 4...7))
+                return
+            }
+            let next = farTarget()
+            if Double.random(in: 0..<1) < 0.4 {
+                // A bound on the way.
+                let ahead: CGFloat = next.x >= mine.position.x ? 1 : -1
+                let landing = clamped(CGPoint(x: mine.position.x + ahead * .random(in: 90...150), y: mine.position.y + .random(in: -20...20)))
+                activity = .leap(from: mine.position, to: landing, start: now, height: .random(in: 26...42))
+                then = .zoom(to: next, left: left - 1)
+            } else {
+                activity = .zoom(to: next, left: left - 1)
+            }
+            return
+        }
         if let next = then {
             activity = next
             then = nil
@@ -1362,14 +1788,65 @@ final class PetWorld: ObservableObject {
         }
     }
 
+    /// Resting, it looks the other way now and then.
+    private func lookAround(_ pose: inout PetPose, now: CFTimeInterval) {
+        guard now >= nextLook else { return }
+        nextLook = now + .random(in: 2.5...7)
+        if Double.random(in: 0..<1) < 0.4 {
+            pose.facingRight.toggle()
+        }
+    }
+
+    /// Somewhere well across the screen, for zoomies.
+    private func farTarget() -> CGPoint {
+        guard let mine else { return area.center }
+        for _ in 0..<8 {
+            let point = CGPoint(x: .random(in: area.minX...area.maxX), y: .random(in: area.minY...area.maxY))
+            if hypot(point.x - mine.position.x, point.y - mine.position.y) > 220 { return point }
+        }
+        return CGPoint(x: .random(in: area.minX...area.maxX), y: .random(in: area.minY...area.maxY))
+    }
+
     /// Picks what to do next.
     private func decide(now: CFTimeInterval) {
         guard let mine else { return }
-        // Balls waiting come first.
+        // Food first.
+        if let bowl {
+            activity = .walk(to: bowlSpot(bowl.spot, for: mine), run: true)
+            then = .eat(until: 0)
+            return
+        }
+        // Then balls waiting.
         if let fetch = nextFetch() {
             activity = fetch
             then = nil
+            plan = []
             return
+        }
+        // Then whatever comes next in what it's doing, like lying down before falling asleep.
+        if !plan.isEmpty {
+            activity = plan.removeFirst()(now)
+            then = nil
+            return
+        }
+        // Hungry or bored: now and then it says so, comes to you and looks up.
+        if now >= nextMoan, isHungry || isBored {
+            nextMoan = now + (isHungry ? .random(in: 120...240) : .random(in: 180...300))
+            mine.say(isHungry ? .hungry : .bored, for: 2.8, now: now)
+            let pointer = NSEvent.mouseLocation
+            if area.contains(pointer) {
+                activity = .walk(to: clamped(CGPoint(x: pointer.x + .random(in: -40...40), y: pointer.y - 40)), run: isHungry)
+                then = .sit(until: now + .random(in: 4...7))
+            } else {
+                activity = .sit(until: now + 5)
+                then = nil
+            }
+            return
+        }
+        // Says something for no reason, now and then.
+        if now >= nextChatter, Double.random(in: 0..<1) < 0.12 {
+            nextChatter = now + .random(in: 120...300)
+            mine.say(.say, for: 1, now: now)
         }
         let roll = Double.random(in: 0..<1)
         let awake = now - awakeSince
@@ -1389,25 +1866,64 @@ final class PetWorld: ObservableObject {
             return
         }
         let pointer = NSEvent.mouseLocation
+        let isCat = mine.look.kind == .cat
+        let pointerNear = area.contains(pointer) && hypot(pointer.x - mine.position.x, pointer.y - mine.position.y) < 300
+        then = nil
         switch roll {
+        case ..<(isCat ? 0.04 : 0.07) where awake > 20 && !isHungry:
+            // Zoomies: a burst of mad running about, with bounds on the way.
+            activity = .zoom(to: farTarget(), left: Int.random(in: 2...4))
+        case ..<0.15 where pointerNear && isCat:
+            // Stalks the pointer: creeps up, crouches with its rear wiggling, and pounces;
+            // then, now and then, washes as if nothing happened.
+            let toward = clamped(CGPoint(x: pointer.x, y: pointer.y - 24))
+            let side: CGFloat = toward.x >= mine.position.x ? -1 : 1
+            activity = .walk(to: clamped(CGPoint(x: toward.x + side * .random(in: 90...130), y: toward.y)), run: false)
+            then = .crouch(until: 0, toward: toward)
+            plan = Bool.random() ? [{ .groom(until: $0 + .random(in: 3...5)) }] : []
+        case ..<0.15 where pointerNear:
+            // Wants to play: runs up, bows, and bounces.
+            let side: CGFloat = pointer.x >= mine.position.x ? -1 : 1
+            activity = .walk(to: clamped(CGPoint(x: pointer.x + side * 70, y: pointer.y - 30)), run: true)
+            then = .stretch(until: 0)
+            plan = [{ .hop(start: $0) }]
+        case ..<0.36:
+            // A wander; a dog often with its nose down, following a smell.
+            if Double.random(in: 0..<1) < (isCat ? 0.15 : 0.5) {
+                let target = wanderTarget()
+                activity = .sniff(to: CGPoint(x: (mine.position.x + target.x) / 2, y: (mine.position.y + target.y) / 2))
+            } else {
+                activity = .walk(to: wanderTarget(), run: false)
+            }
         case ..<0.42:
-            activity = .walk(to: wanderTarget(), run: false)
-        case ..<0.5:
             activity = .walk(to: wanderTarget(), run: true)
-        case ..<0.58 where area.contains(pointer):
+        case ..<0.49 where area.contains(pointer):
             // Comes to see the pointer.
             activity = .walk(to: clamped(CGPoint(x: pointer.x + .random(in: -30...30), y: pointer.y - 30)), run: false)
             then = .sit(until: now + .random(in: 3...6))
-        case ..<0.64 where basketFeet != nil:
-            // Goes to sit by its basket.
+        case ..<0.54 where basketFeet != nil:
+            // Goes to lie by its basket.
             activity = .walk(to: basketSpot(for: mine) ?? wanderTarget(), run: false)
-            then = .sit(until: now + .random(in: 4...8))
-        case ..<0.78:
+            then = Bool.random() ? .sit(until: now + .random(in: 4...8)) : .lie(until: now + .random(in: 8...16))
+        case ..<0.64:
             activity = .sit(until: now + .random(in: 4...10))
-        case ..<(awake > 120 ? 1 : 0.92):
+        case ..<0.73:
+            // Lies down for a rest; sometimes it dozes off.
+            activity = .lie(until: now + .random(in: 8...20))
+            if awake > 90, Double.random(in: 0..<1) < 0.3 {
+                plan = [{ .sleep(until: $0 + .random(in: 25...60)) }]
+            }
+        case ..<0.8:
+            // A wash, or a good scratch.
+            activity = .groom(until: now + (isCat ? .random(in: 3.5...7) : .random(in: 1.8...3)))
+        case ..<0.84:
+            activity = .stretch(until: 0)
+        case ..<(awake > 120 ? 0.97 : 0.93):
             activity = .idle(until: now + .random(in: 1.5...4))
         default:
-            activity = .sleep(until: now + .random(in: 25...60))
+            // Getting sleepy: a yawn, lies down, and drops off.
+            activity = .yawn(until: now + 1.4)
+            plan = [{ .lie(until: $0 + .random(in: 3...6)) }, { .sleep(until: $0 + .random(in: 25...60)) }]
         }
     }
 
@@ -1487,6 +2003,7 @@ final class PetWorld: ObservableObject {
             PetSounds.shared.play(.plop)
             basket.balls.append(contentsOf: inBasket)
             saveBasketBalls()
+            PetPlay.shared.sendBasket()
             basketBounceStart = now
         }
     }

@@ -54,6 +54,7 @@ final class PetPlay: ObservableObject {
     private var sendTimer: Timer?
     private var lastHeard = Date()
     private var heardFriend = false
+    private var positionsSent = 0
 
     private init() {}
 
@@ -187,7 +188,7 @@ final class PetPlay: ObservableObject {
         self.channel = channel
         heardFriend = false
         lastHeard = Date()
-        for event in ["hello", "pos", "chase", "tag", "ball", "got", "bye"] {
+        for event in ["hello", "pos", "chase", "tag", "ball", "got", "basket", "bye"] {
             let stream = channel.broadcastStream(event: event)
             tasks.append(Task { [weak self] in
                 for await message in stream {
@@ -259,6 +260,8 @@ final class PetPlay: ObservableObject {
                 startSending()
             }
             PetWorld.shared.showFriend(look: look, owner: friend.name)
+            // Your basket shows on their desktop too.
+            sendBasket()
         case "pos":
             guard case .playing = state,
                   let x = GameMessage.double(payload["x"]), let y = GameMessage.double(payload["y"]) else { return }
@@ -266,7 +269,11 @@ final class PetPlay: ObservableObject {
             PetWorld.shared.updateFriend(position: CGPoint(x: min(max(x, 0), 1), y: min(max(y, 0), 1)), action: action,
                                          facingRight: payload["f"]?.boolValue ?? true, happy: payload["h"]?.boolValue ?? false,
                                          bubble: payload["b"]?.stringValue.flatMap(PetActor.Bubble.init(rawValue:)),
-                                         ball: payload["c"]?.boolValue ?? false, dizzy: payload["z"]?.boolValue ?? false)
+                                         ball: payload["c"]?.boolValue ?? false, dizzy: payload["z"]?.boolValue ?? false,
+                                         dip: min(max(GameMessage.double(payload["d"]) ?? 0, 0), 1),
+                                         flight: min(max(GameMessage.double(payload["l"]) ?? 0, 0), 1),
+                                         tilt: min(max(GameMessage.double(payload["t"]) ?? 0, -30), 30),
+                                         yawning: payload["y"]?.boolValue ?? false)
         case "chase":
             PetWorld.shared.chased()
         case "tag":
@@ -280,6 +287,12 @@ final class PetPlay: ObservableObject {
         case "got":
             guard let ball = payload["id"]?.stringValue else { return }
             PetWorld.shared.friendTookBall(id: ball)
+        case "basket":
+            guard case .playing = state else { return }
+            let x = GameMessage.double(payload["x"]), y = GameMessage.double(payload["y"])
+            let spot = payload["out"]?.boolValue == true ? x.flatMap { x in y.map { CGPoint(x: min(max(x, 0), 1), y: min(max($0, 0), 1)) } } : nil
+            let balls = (payload["b"]?.arrayValue ?? []).compactMap { GameMessage.int($0) }.prefix(PetWorld.maxBalls * 5)
+            PetWorld.shared.showFriendBasket(at: spot, balls: Array(balls), owner: friend.name)
         case "bye":
             log.info("The friend's pet went home")
             close()
@@ -302,6 +315,18 @@ final class PetPlay: ObservableObject {
         send("ball", ["id": .string(id), "x": .double(target.x), "y": .double(target.y), "k": .integer(color)])
     }
 
+    /// Your basket for the friend's desktop: where it is and what's in it, or that it's put away.
+    /// Sent when it changes and every few seconds, in case a message got lost.
+    func sendBasket() {
+        guard case .playing = state else { return }
+        if let basket = PetWorld.shared.basketState {
+            send("basket", ["out": .bool(true), "x": .double(basket.spot.x), "y": .double(basket.spot.y),
+                            "b": .array(basket.balls.suffix(PetWorld.maxBalls * 5).map { .integer($0) })])
+        } else {
+            send("basket", ["out": .bool(false)])
+        }
+    }
+
     // MARK: Positions
 
     private func startSending() {
@@ -320,6 +345,10 @@ final class PetPlay: ObservableObject {
 
     private func sendPosition() {
         guard case .playing(let friend, _) = state else { return }
+        positionsSent += 1
+        if positionsSent % 40 == 0 {
+            sendBasket()
+        }
         if Date().timeIntervalSince(lastHeard) > Self.silenceTimeout {
             log.info("Lost the friend's pet")
             NotificationManager.shared.postActivity(AppNotification(type: .pet, title: "\(friend.name)'s pet went home", body: "Lost the connection"))
@@ -329,10 +358,21 @@ final class PetPlay: ObservableObject {
         guard let pet = PetWorld.shared.mineState else { return }
         var message: JSONObject = [
             "x": .double(pet.position.x), "y": .double(pet.position.y),
-            "a": .string(pet.action.rawValue), "f": .bool(pet.facingRight), "h": .bool(pet.happy), "c": .bool(pet.ball), "z": .bool(pet.dizzy),
+            "a": .string(pet.pose.action.rawValue), "f": .bool(pet.pose.facingRight), "h": .bool(pet.pose.isHappy), "c": .bool(pet.ball), "z": .bool(pet.dizzy),
         ]
         if let bubble = pet.bubble {
             message["b"] = .string(bubble.rawValue)
+        }
+        // Only what's going on: the head down, a leap, a yawn.
+        if pet.pose.headDip > 0 {
+            message["d"] = .double((pet.pose.headDip * 100).rounded() / 100)
+        }
+        if pet.pose.action == .leap {
+            message["l"] = .double((pet.pose.flight * 100).rounded() / 100)
+            message["t"] = .double(pet.pose.tilt.rounded())
+        }
+        if pet.pose.isYawning {
+            message["y"] = .bool(true)
         }
         send("pos", message)
     }

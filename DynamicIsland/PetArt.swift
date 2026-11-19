@@ -223,6 +223,16 @@ nonisolated enum PetBallColors {
 nonisolated struct PetPose: Equatable, Sendable {
     enum Action: String, Sendable {
         case stand, walk, run, sit, sleep, jump, held
+        /// Lying down awake, like a sphinx: forelegs out in front, head up.
+        case lie
+        /// A stretch (a play bow): rear up, chest down, forelegs out along the ground.
+        case stretch
+        /// Bounding through the air (see `flight` and `tilt`).
+        case leap
+        /// Low on bent legs, about to pounce, its rear wiggling.
+        case crouch
+        /// Sitting and washing: a cat licks a paw, a dog scratches an ear with a hind leg.
+        case groom
     }
 
     var action: Action = .stand
@@ -240,6 +250,16 @@ nonisolated struct PetPose: Equatable, Sendable {
     var isDizzy = false
     /// Tumbling through the air, in degrees.
     var spin: Double = 0
+    /// Head down to the ground, 0 to 1: biting a ball off the floor.
+    var headDip: Double = 0
+    /// A ball held in its mouth, in this color.
+    var ball: PetRGB?
+    /// Yawning wide, eyes shut.
+    var isYawning = false
+    /// The body tipped, in degrees: nose up below 0, nose down above.
+    var tilt: Double = 0
+    /// Through a leap: 0 pushing off, 1 landing.
+    var flight: Double = 0
 }
 
 /// Draws a pet standing on `feet`, `height` points tall (to the top of its ears).
@@ -279,40 +299,68 @@ private struct PetDrawing {
 
     func draw(_ context: inout GraphicsContext) {
         // A soft shadow on the ground.
-        let shadowWidth: CGFloat = pose.action == .jump || pose.action == .held ? 14 : 24
+        let shadowWidth: CGFloat = pose.action == .jump || pose.action == .held || pose.action == .leap ? 14 : 24
         // Tumbling through the air, it leaves no shadow to turn with it.
         if pose.spin == 0 { context.fill(Path(ellipseIn: CGRect(x: -shadowWidth / 2 - 1, y: -1.2, width: shadowWidth, height: 2.6)), with: .color(.black.opacity(0.28))) }
 
         switch pose.action {
-        case .sit: sitting(&context)
+        case .sit, .groom: sitting(&context)
         case .sleep: sleeping(&context)
-        default: standing(&context)
+        case .lie: lying(&context)
+        case .stretch: stretching(&context)
+        case .stand, .walk, .run, .jump, .held, .leap, .crouch: standing(&context)
         }
+    }
+
+    private func mix(_ a: Double, _ b: Double, _ p: Double) -> Double {
+        a + (b - a) * min(max(p, 0), 1)
     }
 
     // MARK: Standing, walking, running, jumping
 
     private func standing(_ context: inout GraphicsContext) {
         let action = pose.action
-        let cycle = pose.time * (action == .run ? 3.2 : action == .walk ? 1.9 : 0) * .pi * 2
-        let swing: Double = action == .run ? 38 : action == .walk ? 24 : 0
+        let gallop = action == .run
+        let leaping = action == .leap
+        let crouching = action == .crouch
+        let cycle = pose.time * (gallop ? 3.4 : action == .walk ? 1.9 : 0) * .pi * 2
+        let swing: Double = gallop ? 44 : action == .walk ? 24 : 0
         let lifted = action == .jump || action == .held
-        // The body bobs a little with each step, and breathes when still.
-        let bob = action == .walk || action == .run ? CGFloat(abs(sin(cycle)) * (action == .run ? 1.2 : 0.6))
+        // The body bobs a little with each step (bounds, galloping), and breathes when still.
+        let bob = action == .walk || gallop ? CGFloat(abs(sin(cycle)) * (gallop ? 1.6 : 0.6))
             : CGFloat(sin(pose.time * 2.2) * 0.25)
-        let lift: CGFloat = lifted ? 2.5 : 0
-        var body = context
-        body.translateBy(x: 0, y: -bob - lift)
+        let lift: CGFloat = lifted ? 2.5 : leaping ? 1.5 : 0
         let legLength: CGFloat = isCat ? 6.5 : isPoodle ? 8 : 7.2
+        // Crouching, its legs fold under it and it sinks.
+        let bend: CGFloat = crouching ? 0.42 : 1
+        let bodyY: CGFloat = isCat ? -9.5 : isPoodle ? -11.5 : -10.5
+        var body = context
+        body.translateBy(x: 0, y: -bob - lift + legLength * (1 - bend))
+        // Galloping it rocks; leaping it points where it's going; crouching its rear's up and wiggling.
+        let pitch = leaping ? pose.tilt : gallop ? sin(cycle) * 6 : crouching ? 5 + sin(pose.time * 15) * 2.5 : 0
+        if pitch != 0 {
+            body.translateBy(x: -1.5, y: bodyY)
+            body.rotate(by: .degrees(pitch))
+            body.translateBy(x: 1.5, y: -bodyY)
+        }
+
+        /// Through a leap: pushing off, stretched out, then reaching down to land.
+        func leapAngle(back: Bool) -> Double {
+            let push = back ? 50.0 : -30.0, stretched = back ? 64.0 : -70.0, land = back ? 22.0 : -12.0
+            let flight = pose.flight
+            return flight < 0.3 ? mix(push, stretched, flight / 0.3) : flight < 0.7 ? stretched : mix(stretched, land, (flight - 0.7) / 0.3)
+        }
 
         func leg(_ x: CGFloat, phase: Double, color: Color, back: Bool) {
             var angle = lifted ? (back ? 30.0 : -30.0) : sin(cycle + phase) * swing
+            if leaping { angle = leapAngle(back: back) }
+            if crouching { angle = back ? 38 : -22 }
             if action == .held { angle = sin(pose.time * 5 + phase) * 12 }
             var leg = body
             leg.translateBy(x: x, y: -legLength + 0.5)
             leg.rotate(by: .degrees(angle))
             let width: CGFloat = isPoodle ? 2.4 : 3.2
-            let rect = CGRect(x: -width / 2, y: 0, width: width, height: legLength + bob + lift - 0.3)
+            let rect = CGRect(x: -width / 2, y: 0, width: width, height: legLength * bend + bob + lift - 0.3)
             leg.fill(Path(roundedRect: rect, cornerRadius: width / 2 - 0.1), with: .color(color))
             if isPoodle {
                 // A pom-pom cuff for a foot.
@@ -322,10 +370,10 @@ private struct PetDrawing {
             }
         }
 
-        let bodyY: CGFloat = isCat ? -9.5 : isPoodle ? -11.5 : -10.5
-        // Far legs, darker, behind the body.
-        leg(-8, phase: .pi, color: farSide, back: true)
-        leg(4.5, phase: 0, color: farSide, back: false)
+        // Far legs, darker, behind the body. Walking, legs go in diagonal pairs; galloping, the
+        // hind pair and the front pair each land close together.
+        leg(-8, phase: gallop ? 0.55 : .pi, color: farSide, back: true)
+        leg(4.5, phase: gallop ? .pi + 0.55 : 0, color: farSide, back: false)
         tail(&body, root: CGPoint(x: isPoodle ? -10.5 : -11.5, y: bodyY - 2))
         // The body, its belly and markings; a poodle's is trim, with a fluffy chest and hips.
         let bodyRect = isPoodle ? CGRect(x: -12, y: bodyY - 4.5, width: 20, height: 9) : CGRect(x: -13, y: bodyY - 5.5, width: 22.5, height: 11)
@@ -340,9 +388,18 @@ private struct PetDrawing {
         // Near legs.
         leg(-6, phase: 0, color: base, back: true)
         leg(6.5, phase: .pi, color: base, back: false)
-        // The head leans forward a touch when running.
-        let headCenter = CGPoint(x: action == .run ? 10.5 : 9.5, y: isCat ? -17 : isPoodle ? -20.5 : -18)
-        head(&body, center: headCenter)
+        // The head leans forward a touch when running, and goes down to the ground to bite.
+        let dip = CGFloat(min(max(pose.headDip, 0), 1))
+        // Crouching, the head's low and forward, eyes on what it's after.
+        let low: CGFloat = crouching ? 3 : 0
+        let headCenter = CGPoint(x: (gallop || leaping ? 10.5 : 9.5) + dip * 2.5 + low * 0.4, y: (isCat ? -17 : isPoodle ? -20.5 : -18) + dip * 4.5 + low)
+        var headContext = body
+        if dip > 0 {
+            headContext.translateBy(x: headCenter.x, y: headCenter.y)
+            headContext.rotate(by: .degrees(Double(dip) * 22))
+            headContext.translateBy(x: -headCenter.x, y: -headCenter.y)
+        }
+        head(&headContext, center: headCenter)
     }
 
     private func markings(_ context: inout GraphicsContext, in rect: CGRect) {
@@ -385,8 +442,9 @@ private struct PetDrawing {
         path.move(to: root)
         if isCat {
             // A long tail that curls up and sways slowly, or swishes when happy.
-            let sway = sin(pose.time * (pose.isHappy ? 7 : 1.6)) * (pose.isHappy ? 3.5 : 2)
-            let low = pose.action == .run
+            let crouching = pose.action == .crouch
+            let sway = sin(pose.time * (pose.isHappy ? 7 : crouching ? 9 : 1.6)) * (pose.isHappy ? 3.5 : 2)
+            let low = pose.action == .run || pose.action == .leap || crouching
             path.addCurve(to: CGPoint(x: root.x - 6 + sway * 0.5, y: root.y - (low ? 2 : 11)),
                           control1: CGPoint(x: root.x - 6, y: root.y + 1),
                           control2: CGPoint(x: root.x - 8 + sway, y: root.y - (low ? 1 : 6)))
@@ -451,6 +509,11 @@ private struct PetDrawing {
         }
 
         let eyeY = center.y - 0.6
+        if let ball = pose.ball {
+            // Held in its jaws: the muzzle, drawn next, covers the top of it.
+            let hold = isCat ? CGPoint(x: center.x + 5.4, y: center.y + 4.4) : CGPoint(x: center.x + (isPoodle ? 7.2 : 6.8), y: center.y + 4.6)
+            drawPetBall(&context, center: hold, radius: isCat ? 3 : 3.3, color: ball)
+        }
         if isCat {
             // Muzzle, nose, whiskers.
             context.fill(Path(ellipseIn: CGRect(x: center.x + 1.8, y: center.y + 0.8, width: 5, height: 3.6)), with: .color(light.opacity(coat.marking == .patches ? 1 : 0.9)))
@@ -503,7 +566,7 @@ private struct PetDrawing {
                 squeeze.addLine(to: CGPoint(x: eyeX + side * size * 0.5, y: eyeY))
                 squeeze.addLine(to: CGPoint(x: eyeX - side * size * 0.6, y: eyeY + size * 0.55))
                 context.stroke(squeeze, with: .color(Color(white: 0.08)), style: StrokeStyle(lineWidth: 0.6, lineCap: .round, lineJoin: .round))
-            } else if pose.isBlinking {
+            } else if pose.isBlinking || pose.isYawning {
                 var lid = Path()
                 lid.move(to: CGPoint(x: eyeX - size * 0.7, y: eyeY))
                 lid.addQuadCurve(to: CGPoint(x: eyeX + size * 0.7, y: eyeY), control: CGPoint(x: eyeX, y: eyeY + 0.9))
@@ -547,7 +610,13 @@ private struct PetDrawing {
                 mouth.addLine(to: CGPoint(x: start.x + CGFloat(step) * 0.75, y: start.y + (step % 2 == 0 ? 0 : 0.6)))
             }
             context.stroke(mouth, with: .color(Color(white: 0.1)), style: StrokeStyle(lineWidth: 0.45, lineCap: .round, lineJoin: .round))
-        } else if pose.mouthOpen {
+        } else if pose.isYawning {
+            // Wide open, tongue curled.
+            let mouth = isCat ? CGPoint(x: center.x + 5.2, y: center.y + 3.1) : CGPoint(x: center.x + 6, y: center.y + 4.6)
+            let open = CGRect(x: mouth.x - 1.7, y: mouth.y - 1, width: 3.4, height: isCat ? 3.6 : 4.2)
+            context.fill(Path(ellipseIn: open), with: .color(Color(red: 0.42, green: 0.1, blue: 0.14)))
+            context.fill(Path(ellipseIn: CGRect(x: open.minX + 0.6, y: open.maxY - 1.7, width: 2.2, height: 1.4)), with: .color(Color(red: 0.95, green: 0.45, blue: 0.52)))
+        } else if pose.mouthOpen && pose.ball == nil {
             let mouth = isCat ? CGPoint(x: center.x + 5.6, y: center.y + 2.6) : CGPoint(x: center.x + 6.2, y: center.y + 4.4)
             context.fill(Path(ellipseIn: CGRect(x: mouth.x - 1, y: mouth.y - 0.4, width: 2, height: isCat ? 1.6 : 2.6)), with: .color(Color(red: 0.95, green: 0.42, blue: 0.5)))
         }
@@ -629,8 +698,26 @@ private struct PetDrawing {
         } else {
             body.fill(Path(ellipseIn: CGRect(x: -10, y: -6.5, width: 9, height: 6.5)), with: .color(base))
         }
-        // Front legs, straight down.
+        let grooming = pose.action == .groom
+        if grooming && !isCat {
+            // A hind leg up behind the ear, scratching away fast.
+            var leg = body
+            leg.translateBy(x: -5, y: -4.5)
+            leg.rotate(by: .degrees(-168 + sin(pose.time * 50) * 9))
+            let shin = Path(roundedRect: CGRect(x: -1.7, y: 0, width: 3.4, height: 14), cornerRadius: 1.6)
+            leg.fill(shin, with: .color(base))
+            leg.stroke(shin, with: .color(outline.opacity(0.55)), lineWidth: lineWidth)
+            if isPoodle {
+                pom(&leg, center: CGPoint(x: 0, y: 14), radius: 2.4)
+            } else {
+                let foot = Path(ellipseIn: CGRect(x: -2, y: 12.4, width: 4, height: 2.6))
+                leg.fill(foot, with: .color(base.mix(with: .white, by: 0.12)))
+                leg.stroke(foot, with: .color(outline.opacity(0.55)), lineWidth: lineWidth)
+            }
+        }
+        // Front legs, straight down; washing, a cat's near one is up at its mouth.
         for x in [1.0, 3.6] as [CGFloat] {
+            if grooming && isCat && x > 2 { continue }
             let color = x < 2 ? farSide : base
             if isPoodle {
                 body.fill(Path(roundedRect: CGRect(x: x + 0.3, y: -9, width: 2.4, height: 8.5), cornerRadius: 1.1), with: .color(color))
@@ -640,7 +727,110 @@ private struct PetDrawing {
                 body.fill(Path(ellipseIn: CGRect(x: x - 0.3, y: -2, width: 3.6, height: 2.2)), with: .color(base.mix(with: .white, by: 0.12)))
             }
         }
-        head(&body, center: CGPoint(x: 3, y: isCat ? -21 : isPoodle ? -23 : -22))
+        let headCenter = CGPoint(x: 3, y: isCat ? -21 : isPoodle ? -23 : -22)
+        guard grooming else {
+            head(&body, center: headCenter)
+            return
+        }
+        // Washing: eyes shut; a cat bends its head to its paw and licks, a dog leans into the scratch.
+        var washing = pose
+        washing.isBlinking = true
+        washing.mouthOpen = isCat ? sin(pose.time * 6) > 0.2 : true
+        var tilted = body
+        tilted.translateBy(x: headCenter.x, y: headCenter.y)
+        tilted.rotate(by: .degrees(isCat ? 16 + sin(pose.time * 6) * 4 : -14))
+        tilted.translateBy(x: -headCenter.x, y: -headCenter.y)
+        PetDrawing(look: look, coat: coat, pose: washing).head(&tilted, center: headCenter)
+        if isCat {
+            // The paw being licked, in front of the chin.
+            var paw = body
+            paw.translateBy(x: 4.6, y: -11)
+            paw.rotate(by: .degrees(-158 + sin(pose.time * 6) * 7))
+            paw.fill(Path(roundedRect: CGRect(x: -1.5, y: 0, width: 3, height: 7.5), cornerRadius: 1.4), with: .color(base))
+            paw.fill(Path(ellipseIn: CGRect(x: -1.8, y: 6.2, width: 3.6, height: 2.4)), with: .color(base.mix(with: .white, by: 0.12)))
+        }
+    }
+
+    // MARK: Lying down, stretching
+
+    /// A foreleg lying along the ground, from `x` forward.
+    private func foreleg(_ context: inout GraphicsContext, x: CGFloat, color: Color) {
+        context.fill(Path(roundedRect: CGRect(x: x, y: -2.8, width: 10.5, height: 2.8), cornerRadius: 1.4), with: .color(color))
+        if isPoodle {
+            pom(&context, center: CGPoint(x: x + 10, y: -1.6), radius: 2.3, color: color)
+        } else {
+            context.fill(Path(ellipseIn: CGRect(x: x + 8.4, y: -2.7, width: 3.6, height: 2.7)), with: .color(color.mix(with: .white, by: 0.12)))
+        }
+    }
+
+    /// Lying awake like a sphinx: belly down, forelegs out in front, a hind leg folded, head up.
+    private func lying(_ context: inout GraphicsContext) {
+        let breathe = CGFloat(sin(pose.time * 1.8)) * 0.35
+        let flick = CGFloat(sin(pose.time * (pose.isHappy ? 8 : 1.1))) * (pose.isHappy ? 2.2 : 1)
+        // The tail along the ground behind, its tip flicking.
+        if isPoodle {
+            var stem = Path()
+            stem.move(to: CGPoint(x: -10, y: -4))
+            stem.addLine(to: CGPoint(x: -13 + flick * 0.4, y: -7))
+            context.stroke(stem, with: .color(base), style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+            pom(&context, center: CGPoint(x: -13 + flick * 0.4, y: -7), radius: 2.8, color: pomColor(2))
+        } else {
+            var tail = Path()
+            tail.move(to: CGPoint(x: -11, y: -3))
+            tail.addQuadCurve(to: CGPoint(x: -19 + flick, y: isCat ? -3.5 : -4.5), control: CGPoint(x: -15, y: 0.5))
+            context.stroke(tail, with: .color(coat.marking == .patches && !isCat ? dark : base), style: StrokeStyle(lineWidth: isCat ? 2.8 : 2.4, lineCap: .round))
+        }
+        foreleg(&context, x: 2.5, color: farSide)
+        let bodyRect = CGRect(x: -13, y: -9.5 - breathe, width: 21.5, height: 9.5 + breathe)
+        context.fill(Path(ellipseIn: bodyRect), with: .color(base))
+        markings(&context, in: bodyRect)
+        context.stroke(Path(ellipseIn: bodyRect), with: .color(outline.opacity(0.5)), lineWidth: lineWidth)
+        // The folded hind leg: a round haunch, its paw tucked forward.
+        if isPoodle {
+            pom(&context, center: CGPoint(x: -8, y: -5), radius: 4.4, color: pomColor(0))
+            pom(&context, center: CGPoint(x: 5, y: -7.5), radius: 5, color: pomColor(1))
+        } else {
+            let haunch = Path(ellipseIn: CGRect(x: -12.5, y: -8.2, width: 9.5, height: 8))
+            context.fill(haunch, with: .color(base))
+            context.stroke(haunch, with: .color(outline.opacity(0.3)), lineWidth: lineWidth)
+            context.fill(Path(ellipseIn: CGRect(x: -5.5, y: -2.4, width: 4.4, height: 2.4)), with: .color(base.mix(with: .white, by: 0.12)))
+        }
+        foreleg(&context, x: 4.5, color: base)
+        head(&context, center: CGPoint(x: 9.5, y: (isCat ? -12.5 : isPoodle ? -14.5 : -13) - breathe * 0.5))
+    }
+
+    /// The play bow: hind legs straight, rear and tail up, chest down between forelegs stretched
+    /// out along the ground, head low and looking ahead.
+    private func stretching(_ context: inout GraphicsContext) {
+        let hip = CGPoint(x: -7, y: (isCat ? -9.5 : isPoodle ? -11.5 : -10.5) - 1.5)
+        func hindLeg(_ x: CGFloat, color: Color) {
+            let top = hip.y + 3
+            let width: CGFloat = isPoodle ? 2.4 : 3.2
+            context.fill(Path(roundedRect: CGRect(x: x - width / 2, y: top, width: width, height: -top - 0.3), cornerRadius: width / 2 - 0.1), with: .color(color))
+            if isPoodle {
+                pom(&context, center: CGPoint(x: x, y: -1.4), radius: 2.5, color: color)
+            } else {
+                context.fill(Path(ellipseIn: CGRect(x: x - 1.9, y: -2, width: 3.8, height: 2.2)), with: .color(color.mix(with: .white, by: 0.12)))
+            }
+        }
+        hindLeg(-9, color: farSide)
+        foreleg(&context, x: 3, color: farSide)
+        var body = context
+        body.translateBy(x: hip.x, y: hip.y)
+        body.rotate(by: .degrees(22))
+        body.translateBy(x: -hip.x, y: -hip.y)
+        tail(&body, root: CGPoint(x: isPoodle ? -10.5 : -11.5, y: hip.y - 2))
+        let bodyRect = isPoodle ? CGRect(x: -12, y: hip.y - 4.5, width: 20, height: 9) : CGRect(x: -13, y: hip.y - 5.5, width: 22.5, height: 11)
+        body.fill(Path(ellipseIn: bodyRect), with: .color(base))
+        markings(&body, in: bodyRect)
+        body.stroke(Path(ellipseIn: bodyRect), with: .color(outline.opacity(0.5)), lineWidth: lineWidth)
+        if isPoodle {
+            pom(&body, center: CGPoint(x: bodyRect.minX + 2.5, y: hip.y - 0.5), radius: 4, color: pomColor(0))
+            pom(&body, center: CGPoint(x: bodyRect.maxX - 3.5, y: hip.y - 1.2), radius: 5.8, color: pomColor(1))
+        }
+        hindLeg(-6.5, color: base)
+        foreleg(&context, x: 5, color: base)
+        head(&context, center: CGPoint(x: 11.5, y: isCat ? -8.8 : isPoodle ? -10 : -9.2))
     }
 
     // MARK: Sleeping

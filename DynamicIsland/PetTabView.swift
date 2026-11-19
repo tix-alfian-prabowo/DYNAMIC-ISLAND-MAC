@@ -69,29 +69,37 @@ struct PetTabView: View {
                         .pointingHandCursor()
                         .help(sounds.isOn ? "Sounds on: click to keep \(look.name) quiet (it's quiet in Meet calls anyway)" : "Sounds off: click to hear \(look.name)")
                     }
-                    Text("\(sizeName(look)) \(look.coatStyle.name.lowercased()) \(look.title.lowercased()) · \(store.isOut ? "out on the desktop" : "asleep in the notch")")
+                    Text("\(sizeName(look)) \(look.coatStyle.name.lowercased()) \(look.title.lowercased()) · \(store.isOut ? "out on the desktop" : "asleep in the notch")\(world.isHungry ? " · hungry" : world.isBored && store.isOut ? " · bored" : "")")
                         .font(.system(size: layout.wide(10, 11), design: .rounded))
                         .foregroundColor(DropStyle.muted)
                 }
             }
-            HStack(spacing: 8) {
-                DropButton(title: store.isOut ? "Call Home" : "Let Out", systemImage: store.isOut ? "house.fill" : "pawprint.fill",
-                           prominent: true, height: 24) {
+            HStack(spacing: 6) {
+                DropButton(title: store.isOut ? "Home" : "Let Out", systemImage: store.isOut ? "house.fill" : "pawprint.fill",
+                           prominent: !store.isOut, height: 24) {
                     store.isOut.toggle()
                 }
-                .frame(width: 100)
+                .frame(width: 76)
+                .help(store.isOut ? "Call \(look.name) home into the notch" : "Let \(look.name) out onto the desktop")
+                DropButton(title: "Feed", systemImage: "fork.knife", prominent: world.isHungry, height: 24) {
+                    world.feed()
+                }
+                .frame(width: 64)
+                .disabled(world.isBowlOut)
+                .opacity(world.isBowlOut ? 0.45 : 1)
+                .help(world.isHungry ? "\(look.name) is hungry: put a bowl of food out" : "Put a bowl of food out (a treat; it gets hungry every few hours)")
                 let isFull = world.ballCount >= PetWorld.maxBalls
-                DropButton(title: world.ballCount > 0 ? "Ball \(world.ballCount)/\(PetWorld.maxBalls)" : "Ball", systemImage: "tennisball.fill", height: 24) {
+                DropButton(title: world.ballCount > 0 ? "\(world.ballCount)/\(PetWorld.maxBalls)" : "Ball", systemImage: "tennisball.fill", height: 24) {
                     play.throwBall()
                 }
-                .frame(width: 92)
+                .frame(width: 70)
                 .disabled(isFull)
                 .opacity(isFull ? 0.45 : 1)
                 .help(isFull ? "Ten balls are out: wait for the pets to bring some back" : "Throw a ball from the notch for the pets to fetch (up to \(PetWorld.maxBalls))")
-                DropButton(title: world.basketIsOut ? "Put Away" : "Basket", systemImage: "basket.fill", height: 24) {
+                DropButton(title: "Basket", systemImage: "basket.fill", prominent: world.basketIsOut, height: 24) {
                     world.toggleBasket()
                 }
-                .frame(width: 96)
+                .frame(width: 76)
                 .help(world.basketIsOut ? "Put the basket away; its balls stay in it"
                       : "Put a basket on the desktop: your pet brings the balls to it, and a click on it gives one back")
             }

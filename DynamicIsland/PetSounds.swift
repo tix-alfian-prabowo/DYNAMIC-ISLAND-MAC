@@ -1,12 +1,15 @@
 import AVFoundation
 import Combine
 import Foundation
+import OSLog
 import QuartzCore
 
-/// The pets' voices, made here from tones rather than recordings: a cat meows, a dog woofs, a
-/// poodle yips. A smaller pet sounds higher and a bigger one lower, and each pet's name tunes its
-/// voice a little, so no two sound quite alike. The speaker button in the Pet tab turns them off,
-/// and they keep quiet while you're in a Meet call.
+/// The pets' voices: real cats and dogs, from the recordings in PetVoices (all public domain or
+/// CC0; the README says whose they are). A cat meows, purrs and chirps, a dog barks and whines,
+/// a poodle yips. A smaller pet sounds higher and a bigger one lower, and each pet's name tunes
+/// its voice a little, so no two sound quite alike. The little noises around them (a bonk, a
+/// ball popping out, crunching kibble) are made here from tones. The speaker button in the Pet
+/// tab turns them off, and they keep quiet while you're in a Meet call.
 final class PetSounds: ObservableObject {
     static let shared = PetSounds()
 
@@ -23,6 +26,22 @@ final class PetSounds: ObservableObject {
         case pop
         /// A ball dropping into the basket.
         case plop
+        /// Nobody's played with it for a while: a long, lazy meow, or a dog's whine.
+        case bored
+        /// Wants feeding: meow meow, or a whine and a woof.
+        case hungry
+        /// Crunching kibble.
+        case munch
+        /// Snapping up a ball: "hap!".
+        case chomp
+
+        /// The pet itself speaking (a recording), rather than a noise made from tones.
+        var isVoice: Bool {
+            switch self {
+            case .talk, .surprise, .happy, .bored, .hungry: return true
+            case .bonk, .pop, .plop, .munch, .chomp: return false
+            }
+        }
     }
 
     @Published var isOn: Bool {
@@ -31,6 +50,7 @@ final class PetSounds: ObservableObject {
     /// In a Meet call: no sounds.
     var isInCall = false
 
+    private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "DynamicIsland", category: "PetSounds")
     private static let onKey = "petSoundsOn"
     private static let rate = 44_100.0
     /// Softer than the system's own sounds.
@@ -45,24 +65,32 @@ final class PetSounds: ObservableObject {
 
     /// Plays a sound in `look`'s voice; the same sound again within a moment is skipped.
     func play(_ sound: Sound, for look: PetLook? = nil, volume: Float = 1) {
-        guard isOn, !isInCall else { return }
+        guard isOn, !isInCall else {
+            Self.log.notice("\(sound.rawValue, privacy: .public) skipped: sounds \(self.isOn ? "on" : "off", privacy: .public), in call \(self.isInCall, privacy: .public)")
+            return
+        }
         let now = CACurrentMediaTime()
         if let last = lastPlayed[sound], now - last < 0.3 { return }
         lastPlayed[sound] = now
         let voice = Voice(look)
-        let key = "\(sound.rawValue)-\(voice.kind.rawValue)-\(voice.pitch)"
+        let take = Int.random(in: 0..<Self.takes(sound, voice.kind))
+        let key = "\(sound.rawValue)-\(voice.kind.rawValue)-\(voice.pitch)-\(take)"
         let data: Data
         if let cached = cache[key] {
             data = cached
         } else {
-            data = Self.wav(Self.samples(sound, voice))
+            data = Self.wav(Self.samples(sound, voice, take: take), normalize: !sound.isVoice)
             cache[key] = data
         }
         players.removeAll { !$0.isPlaying }
-        guard let player = try? AVAudioPlayer(data: data, fileTypeHint: AVFileType.wav.rawValue) else { return }
+        guard let player = try? AVAudioPlayer(data: data, fileTypeHint: AVFileType.wav.rawValue) else {
+            Self.log.error("\(sound.rawValue, privacy: .public) (\(voice.kind.rawValue, privacy: .public)): couldn't play \(data.count, privacy: .public) bytes")
+            return
+        }
         player.volume = Self.loudness * volume
-        player.play()
+        let started = player.play()
         players.append(player)
+        Self.log.notice("\(sound.rawValue, privacy: .public) (\(voice.kind.rawValue, privacy: .public), take \(take + 1, privacy: .public)): \(String(format: "%.2f", player.duration), privacy: .public) s at volume \(String(format: "%.2f", player.volume), privacy: .public), started \(started, privacy: .public)")
     }
 
     // MARK: Voices
@@ -93,133 +121,137 @@ final class PetSounds: ObservableObject {
         }
     }
 
-    private static func samples(_ sound: Sound, _ voice: Voice) -> [Float] {
+    /// How many takes a sound has; one is picked at random each time, so it doesn't get samey.
+    private static func takes(_ sound: Sound, _ kind: Voice.Kind) -> Int {
+        switch (sound, kind) {
+        case (.talk, .cat), (.happy, .cat): return 3
+        case (.talk, .dog): return 4
+        case (.talk, .poodle), (.happy, .dog), (.bored, .dog), (.bored, .poodle): return 2
+        default: return 1
+        }
+    }
+
+    /// A poodle is a small dog: its barks are yips, higher than a big dog's.
+    private static let yip = 1.45
+
+    private static func samples(_ sound: Sound, _ voice: Voice, take: Int) -> [Float] {
         let pitch = voice.pitch
+        func clip(_ name: String, _ shift: Double = 1) -> [Float] { recorded(name, pitch: pitch * shift) }
+        func bark(_ number: Int, _ shift: Double = 1) -> [Float] { clip("dog-bark-\(number)", shift) }
         switch (sound, voice.kind) {
-        case (.talk, .cat): return meow(pitch: pitch)
-        case (.talk, .dog): return barks(.woof, pitch: pitch, count: 1, gap: 0)
-        case (.talk, .poodle): return barks(.yip, pitch: pitch, count: 2, gap: 0.06)
-        case (.surprise, .cat): return mew(pitch: pitch)
-        case (.surprise, .dog): return barks(.yelp, pitch: pitch, count: 1, gap: 0)
-        case (.surprise, .poodle): return barks(.yelp, pitch: pitch * 1.3, count: 1, gap: 0)
-        case (.happy, .cat): return trill(pitch: pitch)
-        case (.happy, .dog): return barks(.arf, pitch: pitch, count: 2, gap: 0.08)
-        case (.happy, .poodle): return barks(.yip, pitch: pitch * 1.1, count: 3, gap: 0.05)
+        case (.talk, .cat): return clip("cat-meow-\(take + 1)")
+        case (.talk, .dog): return bark(take + 1)
+        case (.talk, .poodle): return bark(take + 1, yip) + silence(0.04) + bark(take + 2, yip * 1.04)
+        case (.surprise, .cat): return clip("cat-trill-1", 1.2)
+        case (.surprise, .dog): return bark(3, 1.3)
+        case (.surprise, .poodle): return bark(3, yip * 1.3)
+        case (.happy, .cat): return take == 2 ? clip("cat-purr") : clip("cat-trill-\(take + 1)")
+        case (.happy, .dog): return bark(take * 2 + 1, 1.06) + silence(0.09) + bark(take * 2 + 2, 1.06)
+        case (.happy, .poodle):
+            return bark(1, yip) + silence(0.03) + bark(2, yip * 1.05) + silence(0.03) + bark(4, yip)
+        case (.bored, .cat): return clip("cat-plead-3")
+        case (.bored, .dog), (.bored, .poodle):
+            let shift = voice.kind == .dog ? 0.85 : 1
+            return take == 0 ? clip("dog-whine-2", shift) : clip("dog-whine-1", shift) + silence(0.15) + clip("dog-whine-3", shift)
+        case (.hungry, .cat): return clip("cat-plead-1") + silence(0.18) + clip("cat-plead-2")
+        case (.hungry, .dog): return clip("dog-whine-1", 0.85) + silence(0.12) + bark(2)
+        case (.hungry, .poodle):
+            return clip("dog-whine-3") + silence(0.08) + bark(1, yip) + silence(0.04) + bark(2, yip * 1.04)
+        case (.munch, _): return munch()
+        case (.chomp, _): return chomp(pitch: pitch)
         case (.bonk, _): return bonk()
         case (.pop, _): return sweep(from: 700, to: 1500, length: 0.07)
         case (.plop, _): return sweep(from: 650, to: 240, length: 0.12)
         }
     }
 
-    /// "Mi-aaa-ow": up, then down, the mouth opening and closing.
-    private static func meow(pitch: Double) -> [Float] {
-        voiced(length: 0.42,
-               f0: { p in pitch * (p < 0.3 ? mix(520, 760, ease(p / 0.3)) : mix(760, 480, ease((p - 0.3) / 0.7))) },
-               formant: { p in pitch.squareRoot() * (p < 0.25 ? mix(650, 1900, p / 0.25) : mix(1900, 850, (p - 0.25) / 0.75)) },
-               envelope: { p in swell(p, attack: 0.12, release: 0.35) })
+    private static func silence(_ seconds: Double) -> [Float] {
+        [Float](repeating: 0, count: Int(seconds * rate))
     }
 
-    /// A short squeaky "mew?", going up.
-    private static func mew(pitch: Double) -> [Float] {
-        voiced(length: 0.2,
-               f0: { p in pitch * mix(620, 980, ease(p)) },
-               formant: { p in pitch.squareRoot() * mix(1500, 2300, p) },
-               envelope: { p in swell(p, attack: 0.1, release: 0.3) })
-    }
+    // MARK: Recordings
 
-    /// "Mrrrp": a rolling little chirp.
-    private static func trill(pitch: Double) -> [Float] {
-        let length = 0.32
-        return voiced(length: length,
-                      f0: { p in pitch * mix(480, 640, ease(p)) },
-                      formant: { p in pitch.squareRoot() * mix(1300, 1700, p) },
-                      envelope: { p in swell(p, attack: 0.1, release: 0.3) * (0.65 + 0.35 * sin(2 * .pi * 30 * p * length)) })
-    }
+    /// The PetVoices clips, read once each.
+    private static var recordings: [String: [Float]] = [:]
 
-    /// How a bark goes: its pitch (in Hz, for a medium dog) at the start, the top and the end,
-    /// how long, how wide the mouth opens ("woof" to "arf"), and how much growl is under it.
-    private struct Bark {
-        let base: Double
-        let length: Double
-        let open: Double
-        let start: Double, peak: Double, peakAt: Double, end: Double
-        let growl: Double
-
-        /// A deep, round "woof".
-        static let woof = Bark(base: 290, length: 0.21, open: 0.8, start: 0.78, peak: 1, peakAt: 0.2, end: 0.66, growl: 0.38)
-        /// A short, bright "arf".
-        static let arf = Bark(base: 370, length: 0.13, open: 1.1, start: 0.85, peak: 1, peakAt: 0.18, end: 0.72, growl: 0.25)
-        /// A startled "kai!", up and down.
-        static let yelp = Bark(base: 700, length: 0.16, open: 1.25, start: 0.88, peak: 1.18, peakAt: 0.35, end: 0.86, growl: 0.08)
-        /// A little dog's quick "yip".
-        static let yip = Bark(base: 620, length: 0.09, open: 1.25, start: 0.85, peak: 1.05, peakAt: 0.2, end: 0.8, growl: 0.1)
-    }
-
-    /// Barks one after another, each a touch higher.
-    private static func barks(_ shape: Bark, pitch: Double, count: Int, gap: Double) -> [Float] {
-        var out: [Float] = []
-        for index in 0..<count {
-            out += bark(shape, pitch: pitch * (1 + Double(index) * 0.05), seed: UInt32(index + 1))
-            if index < count - 1 {
-                out += [Float](repeating: 0, count: Int(gap * rate))
+    /// A recorded clip, played faster (higher and shorter) or slower (lower and longer) by
+    /// `pitch`, the way a small animal sounds higher than a big one.
+    private static func recorded(_ name: String, pitch: Double) -> [Float] {
+        let source: [Float]
+        if let loaded = recordings[name] {
+            source = loaded
+        } else {
+            source = load(name)
+            recordings[name] = source
+        }
+        guard abs(pitch - 1) > 0.005, source.count > 1 else { return source }
+        var input = source
+        if pitch > 1 {
+            // Played faster, its highest notes would fold back as hiss; soften them first.
+            let cutoff = 0.45 * rate / pitch
+            let smooth = Float(1 - exp(-2 * .pi * cutoff / rate))
+            var level: Float = 0
+            for index in input.indices {
+                level += (input[index] - level) * smooth
+                input[index] = level
             }
         }
-        return out
-    }
-
-    /// A bark the way a dog makes one: a buzzy, uneven voice with a growl under it and a puff of
-    /// breath at each end, through a throat and mouth (three formants) that open on the "wo" and
-    /// close on the "of".
-    private static func bark(_ shape: Bark, pitch: Double, seed: UInt32) -> [Float] {
-        let count = Int(shape.length * rate)
+        let count = Int(Double(input.count) / pitch)
         var out = [Float](repeating: 0, count: count)
-        var random = Noise(seed: seed &* 2_654_435_761)
-        var phase = 0.0, under = 0.0, wobble = 0.0
-        var throat = Formant(), mouth = Formant(), nose = Formant()
-        let size = pitch.squareRoot()
         for index in 0..<count {
-            let t = Double(index) / rate
-            let p = t / shape.length
-            let contour = p < shape.peakAt ? mix(shape.start, shape.peak, ease(p / shape.peakAt))
-                : mix(shape.peak, shape.end, ease((p - shape.peakAt) / (1 - shape.peakAt)))
-            // A real voice is never steady: a new wobble every millisecond and a half.
-            if index % 64 == 0 {
-                wobble = (random.next() * 2 - 1) * 0.04
-            }
-            let frequency = shape.base * pitch * contour * (1 + wobble)
-            let step = frequency / rate
-            phase += step
-            if phase >= 1 { phase -= 1 }
-            under += step / 2
-            if under >= 1 { under -= 1 }
-            // The buzz of the voice, the growl an octave under, and breath: a burst, then a puff at the end.
-            let breath = 0.55 * exp(-t * 70) + 0.3 * ease((p - 0.55) / 0.45) + 0.1
-            let source = saw(phase, step) + shape.growl * saw(under, step / 2) + (random.next() * 2 - 1) * breath
-            if index % 32 == 0 {
-                let open = (p < 0.25 ? mix(0.5, 1, ease(p / 0.25)) : mix(1, 0.55, ease((p - 0.25) / 0.75))) * shape.open
-                throat.tune(frequency: (360 + 440 * open) * size, bandwidth: 140)
-                mouth.tune(frequency: (850 + 750 * open) * size, bandwidth: 220)
-                nose.tune(frequency: 2500 * size, bandwidth: 320)
-            }
-            let value = throat.process(source) + 0.6 * mouth.process(source) + 0.2 * nose.process(source)
-            // A hard start, a short hold, then dying away.
-            let envelope = min(t / 0.006, 1) * (p < 0.3 ? 1 : exp(-(p - 0.3) * 4)) * swell(p, attack: 0, release: 0.12)
-            out[index] = Float(value * envelope)
+            let at = Double(index) * pitch
+            let whole = min(Int(at), input.count - 2)
+            let part = Float(at - Double(whole))
+            out[index] = input[whole] + (input[whole + 1] - input[whole]) * part
         }
         return out
     }
 
-    /// A sawtooth without the harsh edges a plain one has (PolyBLEP).
-    private static func saw(_ phase: Double, _ step: Double) -> Double {
-        var value = 2 * phase - 1
-        if phase < step {
-            let x = phase / step
-            value -= x + x - x * x - 1
-        } else if phase > 1 - step {
-            let x = (phase - 1) / step
-            value -= x * x + x + x + 1
+    /// A clip from the app's PetVoices folder (mono, 44.1 kHz), or nothing if it's missing.
+    private static func load(_ name: String) -> [Float] {
+        guard let url = Bundle.main.url(forResource: "petvoice-\(name)", withExtension: "wav"),
+              let file = try? AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false),
+              let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)),
+              (try? file.read(into: buffer)) != nil,
+              let channel = buffer.floatChannelData?[0]
+        else {
+            log.error("Pet voice \(name, privacy: .public) is missing or unreadable")
+            return []
         }
-        return value
+        return Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
+    }
+
+    // MARK: Made from tones
+
+
+    /// A snap of the jaws: a click of teeth, then a short squeak of the ball.
+    private static func chomp(pitch: Double) -> [Float] {
+        let click = sweep(from: 2600 * pitch, to: 1300 * pitch, length: 0.025)
+        let squeak = voiced(length: 0.09,
+                            f0: { p in mix(1250, 1500, p) },
+                            formant: { _ in 2600 },
+                            envelope: { p in swell(p, attack: 0.2, release: 0.5) * 0.5 },
+                            breath: 0, harmonics: 3)
+        return click + silence(0.015) + squeak
+    }
+
+    /// Two crunchy bites of kibble.
+    private static func munch() -> [Float] {
+        var out: [Float] = []
+        var random = Noise(seed: 77)
+        for bite in 0..<2 {
+            var crunch = Formant()
+            crunch.tune(frequency: bite == 0 ? 1800 : 2300, bandwidth: 1400)
+            let count = Int(0.07 * rate)
+            for index in 0..<count {
+                let t = Double(index) / rate
+                // Gritty: noise that comes and goes.
+                let grain = random.next() < 0.35 ? random.next() * 2 - 1 : 0
+                out.append(Float(crunch.process(grain) * exp(-t * 45)))
+            }
+            out += silence(0.08)
+        }
+        return out
     }
 
     /// A resonance of the throat or mouth: a band-pass filter that can be retuned as it goes.
@@ -335,12 +367,14 @@ final class PetSounds: ObservableObject {
         return up * down
     }
 
-    /// 16-bit mono WAV, made as loud as it can go without clipping.
-    private static func wav(_ samples: [Float]) -> Data {
+    /// 16-bit mono WAV. Tones are made as loud as they can go without clipping; the recordings
+    /// were evened out when they were cut, so they're left as they are.
+    private static func wav(_ samples: [Float], normalize: Bool) -> Data {
         let peak = max(samples.lazy.map { abs($0) }.max() ?? 1, 0.001)
+        let gain = normalize ? 0.9 / peak : 1
         var pcm = Data(capacity: samples.count * 2)
         for sample in samples {
-            var value = Int16(max(-1, min(1, sample / peak * 0.9)) * 32_000).littleEndian
+            var value = Int16(max(-1, min(1, sample * gain)) * 32_000).littleEndian
             withUnsafeBytes(of: &value) { pcm.append(contentsOf: $0) }
         }
         var data = Data()

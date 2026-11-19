@@ -177,6 +177,8 @@ class PokeService: ObservableObject {
     private var isAway: Bool { !awayReasons.isEmpty }
     private var sleepGate: SleepGate?
     private var awayObservers: [NSObjectProtocol] = []
+    /// Checks in a row the online channel wasn't joined.
+    private var onlineMisses = 0
 
     /// A song playing: "Song — Artist", and Spotify's id for it when it plays in Spotify.
     nonisolated struct Song: Equatable, Sendable {
@@ -361,7 +363,7 @@ class PokeService: ObservableObject {
             done?()
             return
         }
-        log.info("\(away ? "Away" : "Back", privacy: .public) (\(reason.rawValue, privacy: .public)): \(away ? "offline" : "online", privacy: .public) for friends")
+        log.notice("\(away ? "Away" : "Back", privacy: .public) (\(reason.rawValue, privacy: .public)): \(away ? "offline" : "online", privacy: .public) for friends")
         guard let presenceChannel, presenceChannel.status == .subscribed else {
             done?()
             return
@@ -1024,13 +1026,42 @@ class PokeService: ObservableObject {
 
     /// The online channel can drop on its own (a failed join, a network change) while pokes still
     /// arrive; then this Mac and its friends would look offline to each other until a relaunch.
+    /// Left, or stuck joining or leaving for three checks in a row (a minute), it's joined again.
     private func rejoinOnlineIfDropped() async {
-        guard let client, let userID = profile?.id, let channel = presenceChannel,
-              channel.status == .unsubscribed else { return }
-        log.info("Online channel dropped; joining again")
+        guard let client, let userID = profile?.id, let channel = presenceChannel else { return }
+        recheckAway()
+        guard channel.status != .subscribed else {
+            onlineMisses = 0
+            return
+        }
+        onlineMisses += 1
+        guard channel.status == .unsubscribed || onlineMisses >= 3 else { return }
+        log.notice("Online channel \(String(describing: channel.status), privacy: .public) after \(self.onlineMisses) checks; joining again")
+        onlineMisses = 0
         await client.removeChannel(channel)
         presences = [:]
         showOnline(client: client, userID: userID)
+    }
+
+    /// A missed "screen unlocked" or "displays on" would keep you offline for friends while you're
+    /// right at the Mac: away is checked against how the screen really is.
+    private func recheckAway() {
+        guard isAway else { return }
+        let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+        let locked = session?["CGSSessionScreenIsLocked"] as? Bool ?? false
+        let displaysOff = CGDisplayIsAsleep(CGMainDisplayID()) != 0
+        for reason in awayReasons {
+            // Asleep is left alone while the displays are off: Power Nap wakes the Mac for a moment.
+            let isStillSo = switch reason {
+            case .locked: locked
+            case .displaysOff: displaysOff
+            case .asleep: displaysOff || locked
+            }
+            if !isStillSo {
+                log.notice("Away (\(reason.rawValue, privacy: .public)) but the Mac is in use: back online")
+                setAway(false, because: reason)
+            }
+        }
     }
 
     private func stopListening() {
