@@ -1,0 +1,28 @@
+DynamicIsland/PetWorld.swift
+  s_8d4b63dc56ae38::t_1c20a67cfa9991 70-76,217-219,1397,1721-1722,1769
+  s_8d4b63dc56ae38::t_754d141163d764 1014,1017,1719
+  s_8d4b63dc56ae38::t_002bc1a24d831c 1720
+DynamicIsland/PetArt.swift
+  s_8d4b63dc56ae38::t_13f166882e3c9e 253-254,394-395
+  s_8d4b63dc56ae38::t_44224f25722aa2 341-342,397,402-407,409
+  s_8d4b63dc56ae38::t_18da221dc1c25b 408
+  s_8d4b63dc56ae38::t_916f4ff0f38099 411-412,414
+  s_8d4b63dc56ae38::t_3e88efaabc5043 413
+  s_8d4b63dc56ae38::t_002bc1a24d831c 343,400-401,417
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "86865ca2059e21fa1c8f313d6e1e8fb1c8117a84",
+  "prompts": {},
+  "sessions": {
+    "s_8d4b63dc56ae38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e007752f-f59f-43f7-8009-9d3757d57f57",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Alfian Prabowo <103156797+fianprabowo@users.noreply.github.com>"
+    }
+  }
+}
