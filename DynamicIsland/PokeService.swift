@@ -635,6 +635,8 @@ class PokeService: ObservableObject {
             state["pet_name"] = .string(pet.name)
             state["pet_size"] = .double(pet.scale)
             state["pet_breed"] = .string(pet.breed.rawValue)
+            state["pet_wear"] = .string(pet.wear.rawValue)
+            state["pet_wear_color"] = .integer(pet.wearColor)
         }
         return state
     }
@@ -1007,7 +1009,9 @@ class PokeService: ObservableObject {
                             PetLook(kind: kind, coat: GameMessage.int(presence.state["pet_coat"]) ?? 0,
                                     name: presence.state["pet_name"]?.stringValue.map { String($0.prefix(PetStore.nameLimit)) } ?? kind.defaultName,
                                     scale: PetLook.clampedScale(GameMessage.double(presence.state["pet_size"])),
-                                    breed: presence.state["pet_breed"]?.stringValue.flatMap(PetBreed.init(rawValue:)) ?? .standard)
+                                    breed: presence.state["pet_breed"]?.stringValue.flatMap(PetBreed.init(rawValue:)) ?? .standard,
+                                    wear: presence.state["pet_wear"]?.stringValue.flatMap(PetWear.init(rawValue:)) ?? .none,
+                                    wearColor: GameMessage.int(presence.state["pet_wear_color"]) ?? 0)
                         }
                         self?.presences[key] = Presence(ref: presence.ref, userID: id, isInMeeting: isInMeeting, song: song, pet: pet)
                     }
@@ -1113,6 +1117,10 @@ class PokeService: ObservableObject {
         addToHistory(poke, friendID: poke.senderID)
         if !friends.contains(where: { $0.id == poke.senderID }) {
             refreshFriends()
+        }
+        // A fresh poke: their pet brings it, if it's known.
+        if let createdAt = poke.createdAt, Date().timeIntervalSince(createdAt) <= bannerMaxAge {
+            PetWorld.shared.deliverPoke(from: friendPets[poke.senderID], owner: poke.senderName)
         }
 
         if isPokeTabVisible {

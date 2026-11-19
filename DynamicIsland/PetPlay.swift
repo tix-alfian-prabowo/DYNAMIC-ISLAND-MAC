@@ -188,7 +188,7 @@ final class PetPlay: ObservableObject {
         self.channel = channel
         heardFriend = false
         lastHeard = Date()
-        for event in ["hello", "pos", "chase", "tag", "ball", "got", "basket", "bye"] {
+        for event in ["hello", "pos", "chase", "tag", "ball", "got", "basket", "tossed", "take", "tug", "fight", "lick", "bye"] {
             let stream = channel.broadcastStream(event: event)
             tasks.append(Task { [weak self] in
                 for await message in stream {
@@ -228,7 +228,8 @@ final class PetPlay: ObservableObject {
     private func sendHello() {
         guard let channel, let look = PetStore.shared.look else { return }
         let message: JSONObject = ["kind": .string(look.kind.rawValue), "coat": .integer(look.coat), "name": .string(look.name),
-                                   "size": .double(look.scale), "breed": .string(look.breed.rawValue)]
+                                   "size": .double(look.scale), "breed": .string(look.breed.rawValue),
+                                   "wear": .string(look.wear.rawValue), "wearc": .integer(look.wearColor)]
         Task { await channel.broadcast(event: "hello", message: message) }
     }
 
@@ -241,7 +242,9 @@ final class PetPlay: ObservableObject {
             let name = payload["name"]?.stringValue.map { String($0.prefix(PetStore.nameLimit)) } ?? kind.defaultName
             let look = PetLook(kind: kind, coat: GameMessage.int(payload["coat"]) ?? 0, name: name,
                                scale: PetLook.clampedScale(GameMessage.double(payload["size"])),
-                               breed: payload["breed"]?.stringValue.flatMap(PetBreed.init(rawValue:)) ?? .standard)
+                               breed: payload["breed"]?.stringValue.flatMap(PetBreed.init(rawValue:)) ?? .standard,
+                               wear: payload["wear"]?.stringValue.flatMap(PetWear.init(rawValue:)) ?? .none,
+                               wearColor: GameMessage.int(payload["wearc"]) ?? 0)
             let wasHeard = heardFriend
             heardFriend = true
             if case .inviting = state {
@@ -297,6 +300,21 @@ final class PetPlay: ObservableObject {
             let spot = payload["out"]?.boolValue == true ? x.flatMap { x in y.map { CGPoint(x: min(max(x, 0), 1), y: min(max($0, 0), 1)) } } : nil
             let balls = (payload["b"]?.arrayValue ?? []).compactMap { GameMessage.int($0) }.prefix(PetWorld.maxBalls * 5)
             PetWorld.shared.showFriendBasket(at: spot, balls: Array(balls), owner: friend.name)
+        case "tossed":
+            // Their pet dropped a ball into your basket.
+            guard case .playing = state, let color = GameMessage.int(payload["k"]) else { return }
+            PetWorld.shared.friendTossedBall(color: min(max(color, 0), PetBallColors.all.count - 1))
+        case "take":
+            // They clicked your basket on their desktop.
+            guard case .playing = state else { return }
+            PetWorld.shared.friendAskedForBall()
+        case "tug", "fight":
+            guard case .playing = state else { return }
+            PetWorld.shared.friendChallenged(fight: event == "fight", seconds: min(max(GameMessage.double(payload["s"]) ?? 4, 2), 8),
+                                             win: payload["w"]?.boolValue ?? false)
+        case "lick":
+            guard case .playing = state else { return }
+            PetWorld.shared.licked()
         case "bye":
             log.info("The friend's pet went home")
             close()

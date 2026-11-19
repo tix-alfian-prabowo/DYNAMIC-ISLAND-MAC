@@ -34,11 +34,13 @@ final class PetSounds: ObservableObject {
         case munch
         /// Snapping up a ball: "hap!".
         case chomp
+        /// Being stroked: a cat purrs, a dog sighs happily.
+        case purr
 
         /// The pet itself speaking (a recording), rather than a noise made from tones.
         var isVoice: Bool {
             switch self {
-            case .talk, .surprise, .happy, .bored, .hungry: return true
+            case .talk, .surprise, .happy, .bored, .hungry, .purr: return true
             case .bonk, .pop, .plop, .munch, .chomp: return false
             }
         }
@@ -157,6 +159,8 @@ final class PetSounds: ObservableObject {
         case (.hungry, .dog): return clip("dog-whine-1", 0.85) + silence(0.12) + bark(2)
         case (.hungry, .poodle):
             return clip("dog-whine-3") + silence(0.08) + bark(1, yip) + silence(0.04) + bark(2, yip * 1.04)
+        case (.purr, .cat): return clip("cat-purr")
+        case (.purr, _): return clip("dog-whine-1", 1.12)
         case (.munch, _): return munch()
         case (.chomp, _): return chomp(pitch: pitch)
         case (.bonk, _): return bonk()

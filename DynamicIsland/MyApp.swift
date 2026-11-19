@@ -74,7 +74,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .combineLatest(meetController.$meeting.map { $0?.isInCall == true })
             .map { $0 || $1 }
             .removeDuplicates()
-            .sink { [pokeService] in pokeService.setInMeeting($0) }
+            .sink { [pokeService] in
+                pokeService.setInMeeting($0)
+                // The pet naps under the notch through meetings.
+                PetWorld.shared.isInMeeting = $0
+            }
+            .store(in: &cancellables)
+
+        // The pet dances while music plays.
+        spotifyManager.$isPlaying
+            .removeDuplicates()
+            .sink { PetWorld.shared.isMusicPlaying = $0 }
             .store(in: &cancellables)
 
         // The pets keep quiet in a Meet call.

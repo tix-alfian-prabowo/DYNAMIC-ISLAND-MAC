@@ -68,6 +68,19 @@ struct PetTabView: View {
                         .buttonStyle(.plain)
                         .pointingHandCursor()
                         .help(sounds.isOn ? "Sounds on: click to keep \(look.name) quiet (it's quiet in Meet calls anyway)" : "Sounds off: click to hear \(look.name)")
+                        Button {
+                            world.toggleLaser()
+                        } label: {
+                            Image(systemName: "smallcircle.filled.circle")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(world.isLaserOn ? Color(red: 1, green: 0.3, blue: 0.3) : DropStyle.muted)
+                                .frame(width: 16)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .pointingHandCursor()
+                        .help(world.isLaserOn ? "Laser on: \(look.name) chases the red dot on your pointer. Click to put it away"
+                              : "A laser pointer: a red dot on your pointer for \(look.name) to chase")
                     }
                     Text("\(sizeName(look)) \(look.coatStyle.name.lowercased()) \(look.title.lowercased()) · \(store.isOut ? "out on the desktop" : "asleep in the notch")\(world.isHungry ? " · hungry" : world.isBored && store.isOut ? " · bored" : "")")
                         .font(.system(size: layout.wide(10, 11), design: .rounded))
@@ -214,6 +227,7 @@ struct PetChooser: View {
             }
             if !compact {
                 sizes
+                wear
             }
         }
     }
@@ -227,7 +241,8 @@ struct PetChooser: View {
             guard !selected else { return }
             // A name still the old choice's own follows the new one.
             let keepsName = look.name != look.defaultName && !look.name.isEmpty
-            var changed = PetLook(kind: kind, coat: min(look.coat, kind.coats.count - 1), name: "", scale: look.scale, breed: breed)
+            var changed = PetLook(kind: kind, coat: min(look.coat, kind.coats.count - 1), name: "", scale: look.scale, breed: breed,
+                                  wear: look.wear, wearColor: look.wearColor)
             changed.name = keepsName ? look.name : changed.defaultName
             look = changed
         } label: {
@@ -274,6 +289,49 @@ struct PetChooser: View {
         .buttonStyle(.plain)
         .pointingHandCursor()
         .help(coat.name)
+    }
+
+    /// A collar, a bandana, a bow or a party hat, and its color.
+    private var wear: some View {
+        HStack(spacing: 6) {
+            Text("Wear")
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundColor(DropStyle.muted)
+            ForEach(PetWear.allCases, id: \.self) { item in
+                let selected = look.wear == item
+                Button {
+                    look.wear = item
+                } label: {
+                    Text(item.title)
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.white.opacity(selected ? 0.18 : 0.06)))
+                        .overlay(Capsule().strokeBorder(Color.white.opacity(selected ? 0.5 : 0), lineWidth: 1))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+            }
+            if look.wear != .none {
+                HStack(spacing: 4) {
+                    ForEach(PetBallColors.all.indices, id: \.self) { index in
+                        Button {
+                            look.wearColor = index
+                        } label: {
+                            Circle()
+                                .fill(PetBallColors.color(index).color)
+                                .frame(width: 12, height: 12)
+                                .overlay(Circle().strokeBorder(Color.white.opacity(look.wearColor == index ? 0.95 : 0.15), lineWidth: look.wearColor == index ? 2 : 1))
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .pointingHandCursor()
+                    }
+                }
+                .padding(.leading, 4)
+            }
+        }
     }
 
     private var sizes: some View {
