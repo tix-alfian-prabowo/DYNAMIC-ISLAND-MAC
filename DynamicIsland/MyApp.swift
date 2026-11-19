@@ -77,6 +77,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [pokeService] in pokeService.setInMeeting($0) }
             .store(in: &cancellables)
 
+        // The pets keep quiet in a Meet call.
+        meetController.$meeting
+            .map { $0?.isInCall == true }
+            .removeDuplicates()
+            .sink { PetSounds.shared.isInCall = $0 }
+            .store(in: &cancellables)
+
         // Friends see the song too: Spotify or Music only, not YouTube in Chrome.
         Publishers.CombineLatest4(spotifyManager.$isPlaying, spotifyManager.$currentTrack, spotifyManager.$currentArtist, spotifyManager.$sourceApp)
             .combineLatest(spotifyManager.$spotifyTrackURI)

@@ -226,7 +226,8 @@ final class PetPlay: ObservableObject {
 
     private func sendHello() {
         guard let channel, let look = PetStore.shared.look else { return }
-        let message: JSONObject = ["kind": .string(look.kind.rawValue), "coat": .integer(look.coat), "name": .string(look.name)]
+        let message: JSONObject = ["kind": .string(look.kind.rawValue), "coat": .integer(look.coat), "name": .string(look.name),
+                                   "size": .double(look.scale), "breed": .string(look.breed.rawValue)]
         Task { await channel.broadcast(event: "hello", message: message) }
     }
 
@@ -237,7 +238,9 @@ final class PetPlay: ObservableObject {
         case "hello":
             guard let kind = payload["kind"]?.stringValue.flatMap(PetKind.init(rawValue:)) else { return }
             let name = payload["name"]?.stringValue.map { String($0.prefix(PetStore.nameLimit)) } ?? kind.defaultName
-            let look = PetLook(kind: kind, coat: GameMessage.int(payload["coat"]) ?? 0, name: name)
+            let look = PetLook(kind: kind, coat: GameMessage.int(payload["coat"]) ?? 0, name: name,
+                               scale: PetLook.clampedScale(GameMessage.double(payload["size"])),
+                               breed: payload["breed"]?.stringValue.flatMap(PetBreed.init(rawValue:)) ?? .standard)
             let wasHeard = heardFriend
             heardFriend = true
             if case .inviting = state {
@@ -271,7 +274,9 @@ final class PetPlay: ObservableObject {
         case "ball":
             guard let ball = payload["id"]?.stringValue,
                   let x = GameMessage.double(payload["x"]), let y = GameMessage.double(payload["y"]) else { return }
-            PetWorld.shared.throwBall(id: ball, target: CGPoint(x: min(max(x, 0), 1), y: min(max(y, 0), 1)))
+            // Older versions don't say its color: the same one comes from its id on both Macs.
+            let color = GameMessage.int(payload["k"]) ?? PetBallColors.index(for: ball)
+            PetWorld.shared.throwBall(id: ball, target: CGPoint(x: min(max(x, 0), 1), y: min(max(y, 0), 1)), color: color)
         case "got":
             guard let ball = payload["id"]?.stringValue else { return }
             PetWorld.shared.friendTookBall(id: ball)
@@ -283,16 +288,18 @@ final class PetPlay: ObservableObject {
         }
     }
 
-    /// Throws a ball for the pets: both chase it.
-    func throwBall() {
+    /// Throws a ball for the pets: both chase it. A new one comes from the notch in a new color;
+    /// one from the basket keeps its own.
+    func throwBall(color: Int? = nil, from: CGPoint? = nil) {
         guard PetWorld.shared.ballCount < PetWorld.maxBalls else { return }
         let id = UUID().uuidString.lowercased()
+        let color = color ?? PetWorld.shared.nextBallColor()
         let target = CGPoint(x: Double.random(in: 0.1...0.9), y: Double.random(in: 0.15...0.75))
         if PetStore.shared.look != nil, !PetStore.shared.isOut {
             PetStore.shared.isOut = true
         }
-        PetWorld.shared.throwBall(id: id, target: target)
-        send("ball", ["id": .string(id), "x": .double(target.x), "y": .double(target.y)])
+        PetWorld.shared.throwBall(id: id, target: target, color: color, from: from)
+        send("ball", ["id": .string(id), "x": .double(target.x), "y": .double(target.y), "k": .integer(color)])
     }
 
     // MARK: Positions

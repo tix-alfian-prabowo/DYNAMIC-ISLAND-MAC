@@ -631,6 +631,8 @@ class PokeService: ObservableObject {
             state["pet_kind"] = .string(pet.kind.rawValue)
             state["pet_coat"] = .integer(pet.coat)
             state["pet_name"] = .string(pet.name)
+            state["pet_size"] = .double(pet.scale)
+            state["pet_breed"] = .string(pet.breed.rawValue)
         }
         return state
     }
@@ -1001,7 +1003,9 @@ class PokeService: ObservableObject {
                         let song = text.isEmpty ? nil : Song(text: text, spotifyURI: uri)
                         let pet = presence.state["pet_kind"]?.stringValue.flatMap(PetKind.init(rawValue:)).map { kind in
                             PetLook(kind: kind, coat: GameMessage.int(presence.state["pet_coat"]) ?? 0,
-                                    name: presence.state["pet_name"]?.stringValue.map { String($0.prefix(PetStore.nameLimit)) } ?? kind.defaultName)
+                                    name: presence.state["pet_name"]?.stringValue.map { String($0.prefix(PetStore.nameLimit)) } ?? kind.defaultName,
+                                    scale: PetLook.clampedScale(GameMessage.double(presence.state["pet_size"])),
+                                    breed: presence.state["pet_breed"]?.stringValue.flatMap(PetBreed.init(rawValue:)) ?? .standard)
                         }
                         self?.presences[key] = Presence(ref: presence.ref, userID: id, isInMeeting: isInMeeting, song: song, pet: pet)
                     }

@@ -1092,6 +1092,15 @@ enum PointingHandCoordinator {
         }
     }
 
+    /// For cursors set elsewhere (the pets'): once, lets them show while the app isn't active.
+    static func allowCursorInBackground() {
+        guard !allowsBackground else { return }
+        allowsBackground = true
+        allowCursorWhileInactive()
+    }
+
+    private static var allowsBackground = false
+
     private static func allowCursorWhileInactive() {
         typealias DefaultConnection = @convention(c) () -> Int32
         typealias SetProperty = @convention(c) (Int32, Int32, CFString, CFTypeRef) -> Int32
@@ -2386,6 +2395,10 @@ private struct NookView: View {
             if !isInCall {
                 isCallExpanded = false
             }
+        }
+        .onAppear {
+            // Fresh events each time the notch opens here.
+            calendarManager.refreshNow()
         }
     }
 

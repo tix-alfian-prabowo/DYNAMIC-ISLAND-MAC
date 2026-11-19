@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import EventKit
+import OSLog
 
 struct CalendarEvent: Identifiable {
     let id: String
@@ -47,6 +48,9 @@ class CalendarManager: ObservableObject {
     private var changeTask: Task<Void, Never>?
     private var meetingTask: Task<Void, Never>?
     private var syncTask: Task<Void, Never>?
+    private var dayTasks: [Task<Void, Never>] = []
+    private var lastSync = Date.distantPast
+    private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "DynamicIsland", category: "Calendar")
     private var wakeObserver: NSObjectProtocol?
     /// How often the calendar accounts (Google, iCloud, Exchange…) are asked for changes, so a
     /// meeting added at short notice shows within about a minute rather than at macOS's own pace.
@@ -63,8 +67,16 @@ class CalendarManager: ObservableObject {
         }
         changeTask = Task { [weak self] in
             for await _ in NotificationCenter.default.notifications(named: .EKEventStoreChanged) {
-                self?.reload()
+                self?.reload(because: "calendar changed")
             }
+        }
+        // A new day at midnight, or the clock or time zone changed: the week strip moves on at once.
+        for name in [Notification.Name.NSCalendarDayChanged, .NSSystemClockDidChange, .NSSystemTimeZoneDidChange] {
+            dayTasks.append(Task { [weak self] in
+                for await _ in NotificationCenter.default.notifications(named: name) {
+                    self?.reload(because: "new day or clock change")
+                }
+            })
         }
         // Periodic refresh also rolls "today" over at midnight.
         refreshTask = Task { [weak self] in
@@ -86,7 +98,7 @@ class CalendarManager: ObservableObject {
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.syncAccounts()
-                self?.reload()
+                self?.reload(because: "wake")
             }
         }
     }
@@ -94,7 +106,17 @@ class CalendarManager: ObservableObject {
     /// Asks the calendar accounts for changes; only fetches when there may be some.
     private func syncAccounts() {
         guard hasAccess else { return }
+        lastSync = Date()
         store.refreshSourcesIfNecessary()
+    }
+
+    /// The notch opened on the calendar: read the events again, and ask the accounts for changes
+    /// (at most every 15 seconds), so it never shows what was there minutes ago.
+    func refreshNow() {
+        if Date().timeIntervalSince(lastSync) > 15 {
+            syncAccounts()
+        }
+        reload(because: "opened")
     }
 
     deinit {
@@ -102,6 +124,7 @@ class CalendarManager: ObservableObject {
         changeTask?.cancel()
         meetingTask?.cancel()
         syncTask?.cancel()
+        dayTasks.forEach { $0.cancel() }
     }
 
     var canRequestAccess: Bool {
@@ -122,10 +145,11 @@ class CalendarManager: ObservableObject {
         eventsByDay[Calendar.current.startOfDay(for: date)] ?? []
     }
 
-    func reload() {
+    func reload(because reason: String = "timer") {
         hasAccess = EKEventStore.authorizationStatus(for: .event) == .fullAccess
         guard hasAccess else {
             eventsByDay = [:]
+            log.info("Calendar not reloaded (\(reason, privacy: .public)): no access")
             return
         }
 
@@ -138,6 +162,10 @@ class CalendarManager: ObservableObject {
             byDay[day] = events(from: day, to: nextDay)
         }
         eventsByDay = byDay
+        // Only how many, never what.
+        let total = byDay.values.reduce(0) { $0 + $1.count }
+        let today = byDay[startOfToday]?.count ?? 0
+        log.info("Calendar reloaded (\(reason, privacy: .public)): \(today) today, \(total) this week")
         checkMeetings()
     }
 

@@ -425,10 +425,9 @@ struct DropButton: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .onHover { hovering in
-            isHovered = hovering
-            if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
-        }
+        .onHover { isHovered = $0 }
+        // The hand, but not on a disabled one.
+        .pointingHandCursor()
     }
 }
 
