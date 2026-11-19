@@ -634,6 +634,12 @@ final class PetWorld: ObservableObject {
     private var nextChatter: CFTimeInterval = 0
     private var nextMunch: CFTimeInterval = 0
     private var bowl: (window: PetBowlWindow, model: PetBowl, spot: CGPoint)?
+    /// A friend's bowl, while playing, where it stands on their desktop: your pet shares it.
+    private var friendBowl: (window: PetBowlWindow, model: PetBowl, feet: CGPoint)?
+    /// Eating from the friend's bowl rather than yours.
+    private var eatsFromFriend = false
+    /// It's had its share of the friend's bowl: it doesn't go back until there's a new one.
+    private var hadFriendsFood = false
     private static let fedKey = "petLastFed"
     static let hungerAfter: TimeInterval = 2.5 * 3600
     private static let boredAfter: CFTimeInterval = 6 * 60
@@ -868,6 +874,7 @@ final class PetWorld: ObservableObject {
     /// The friend's pet hops back into the notch and goes.
     func removeFriend() {
         removeFriendBasket()
+        removeFriendBowl()
         guard friend != nil, friendGoingHome == nil else { return }
         friendGoingHome = now
         friendTarget = notchDoor
@@ -1004,16 +1011,30 @@ final class PetWorld: ObservableObject {
         PetSounds.shared.play(.pop, volume: 0.5)
         // Drops what it's doing, unless it's in your hand or in the air.
         if isFree, !isFetching {
-            activity = .walk(to: bowlSpot(spot, for: mine), run: true)
-            then = .eat(until: 0)
-            plan = []
+            goEat((spot, false), mine: mine)
         }
         startTimer()
     }
 
-    /// Beside the bowl, facing it, close enough to put its nose in.
-    private func bowlSpot(_ spot: CGPoint, for pet: PetActor) -> CGPoint {
-        let side: CGFloat = pet.position.x < spot.x ? -1 : 1
+    /// Food your pet can go to: your bowl, or else a friend's it hasn't had its share of yet.
+    private var food: (spot: CGPoint, isFriends: Bool)? {
+        if let bowl { return (bowl.spot, false) }
+        if let friendBowl, !hadFriendsFood, friendBowl.model.fill > 0.05 { return (friendBowl.feet, true) }
+        return nil
+    }
+
+    private func goEat(_ food: (spot: CGPoint, isFriends: Bool), mine: PetActor) {
+        eatsFromFriend = food.isFriends
+        activity = .walk(to: bowlSpot(food.spot, for: mine, sharing: food.isFriends), run: true)
+        then = .eat(until: 0)
+        plan = []
+    }
+
+    /// Beside the bowl, facing it, close enough to put its nose in: on the side it comes from,
+    /// or sharing a friend's, across the bowl from their pet.
+    private func bowlSpot(_ spot: CGPoint, for pet: PetActor, sharing: Bool = false) -> CGPoint {
+        let from = sharing ? (friend?.position ?? pet.position) : pet.position
+        let side: CGFloat = (from.x < spot.x) != sharing ? -1 : 1
         return clamped(CGPoint(x: spot.x + side * (pet.height * 0.42 + 12), y: spot.y))
     }
 
@@ -1023,7 +1044,12 @@ final class PetWorld: ObservableObject {
         UserDefaults.standard.set(lastFed, forKey: Self.fedKey)
         isHungry = false
         nextMoan = now + .random(in: 240...420)
-        removeBowl()
+        if eatsFromFriend {
+            hadFriendsFood = true
+        } else {
+            removeBowl()
+        }
+        eatsFromFriend = false
         mine.say(.heart, for: 1.6, now: now)
         PetSounds.shared.play(.happy, for: mine.look)
         activity = .sit(until: now + 3)
@@ -1033,6 +1059,48 @@ final class PetWorld: ObservableObject {
         bowl?.window.orderOut(nil)
         bowl = nil
         if isBowlOut { isBowlOut = false }
+    }
+
+    // MARK: Sharing food
+
+    /// For PetPlay: your bowl, if it's out: where (as a fraction of the area) and how full.
+    var bowlState: (spot: CGPoint, fill: Double)? {
+        bowl.map { (normalized($0.spot), $0.model.fill) }
+    }
+
+    /// Shows a friend's bowl where it stands on their desktop, or takes it away (`spot` nil).
+    /// A new one, your pet comes over to share.
+    func showFriendBowl(at spot: CGPoint?, fill: Double) {
+        guard let spot else {
+            removeFriendBowl()
+            return
+        }
+        let feet = clamped(denormalized(spot))
+        if let friendBowl {
+            if friendBowl.feet != feet {
+                friendBowl.window.place(feet: feet)
+                self.friendBowl?.feet = feet
+            }
+            if friendBowl.model.fill != fill { friendBowl.model.fill = fill }
+            return
+        }
+        let model = PetBowl()
+        model.fill = fill
+        let window = PetBowlWindow(bowl: model)
+        window.place(feet: feet)
+        window.orderFrontRegardless()
+        friendBowl = (window, model, feet)
+        hadFriendsFood = false
+        if let mine, bowl == nil, isFree, !isFetching, fill > 0.05 {
+            goEat((feet, true), mine: mine)
+        }
+        startTimer()
+    }
+
+    private func removeFriendBowl() {
+        friendBowl?.window.orderOut(nil)
+        friendBowl = nil
+        hadFriendsFood = false
     }
 
     // MARK: A friend's basket
@@ -1707,19 +1775,21 @@ final class PetWorld: ObservableObject {
         }
 
         if case .eat(let until) = activity {
+            let eating: (spot: CGPoint, model: PetBowl)? = eatsFromFriend ? friendBowl.map { ($0.feet, $0.model) } : bowl.map { ($0.spot, $0.model) }
             if until == 0 {
                 // Starts on what's left in the bowl.
-                activity = .eat(until: now + Self.eatingTime * max(bowl?.model.fill ?? 1, 0.2))
-            } else if let bowl {
+                activity = .eat(until: now + Self.eatingTime * max(eating?.model.fill ?? 1, 0.2))
+            } else if let eating {
                 pose.action = .stand
-                pose.facingRight = bowl.spot.x > mine.position.x
+                pose.facingRight = eating.spot.x > mine.position.x
                 let left = max((until - now) / Self.eatingTime, 0)
-                if bowl.model.fill != left { bowl.model.fill = left }
+                // A friend's bowl goes down as their pet eats, on their Mac.
+                if !eatsFromFriend, eating.model.fill != left { eating.model.fill = left }
                 chewing = sin(now * 12) > 0
                 // Nose down in the bowl, coming up a touch between mouthfuls.
                 pose.headDip = 1.92 + sin(now * 6) * 0.08
-                bowlInFront = PetActor.BowlInFront(offset: CGVector(dx: bowl.spot.x - mine.position.x, dy: bowl.spot.y - mine.position.y),
-                                                   fill: left)
+                bowlInFront = PetActor.BowlInFront(offset: CGVector(dx: eating.spot.x - mine.position.x, dy: eating.spot.y - mine.position.y),
+                                                   fill: eating.model.fill)
                 if now >= nextMunch {
                     PetSounds.shared.play(.munch, for: mine.look, volume: 0.7)
                     nextMunch = now + 0.55
@@ -1727,6 +1797,9 @@ final class PetWorld: ObservableObject {
                 if now >= until {
                     fed(mine, now: now)
                 }
+            } else if eatsFromFriend {
+                // Their pet finished it off first: it had some.
+                fed(mine, now: now)
             } else {
                 activity = .sit(until: now + 2)
             }
@@ -1827,9 +1900,8 @@ final class PetWorld: ObservableObject {
     private func decide(now: CFTimeInterval) {
         guard let mine else { return }
         // Food first.
-        if let bowl {
-            activity = .walk(to: bowlSpot(bowl.spot, for: mine), run: true)
-            then = .eat(until: 0)
+        if let food {
+            goEat(food, mine: mine)
             return
         }
         // Then balls waiting.
@@ -1983,6 +2055,16 @@ final class PetWorld: ObservableObject {
             friend.bubble = nil
             friend.bubbleUntil = 0
         }
+        // Eating: the bowl it's at, in front of it, like yours.
+        var food: PetActor.BowlInFront?
+        if friend.pose.headDip > 1 {
+            let bowls = [bowl.map { ($0.spot, $0.model.fill) }, friendBowl.map { ($0.feet, $0.model.fill) }].compactMap { $0 }
+            let away = { (spot: CGPoint) in hypot(spot.x - friend.position.x, spot.y - friend.position.y) }
+            if let near = bowls.min(by: { away($0.0) < away($1.0) }), away(near.0) < friend.height + 40 {
+                food = PetActor.BowlInFront(offset: CGVector(dx: near.0.x - friend.position.x, dy: near.0.y - friend.position.y), fill: near.1)
+            }
+        }
+        if friend.bowlInFront != food { friend.bowlInFront = food }
         friend.window?.place(feet: friend.position)
     }
 

@@ -270,10 +270,14 @@ final class PetPlay: ObservableObject {
                                          facingRight: payload["f"]?.boolValue ?? true, happy: payload["h"]?.boolValue ?? false,
                                          bubble: payload["b"]?.stringValue.flatMap(PetActor.Bubble.init(rawValue:)),
                                          ball: payload["c"]?.boolValue ?? false, dizzy: payload["z"]?.boolValue ?? false,
-                                         dip: min(max(GameMessage.double(payload["d"]) ?? 0, 0), 1),
+                                         dip: min(max(GameMessage.double(payload["d"]) ?? 0, 0), 2),
                                          flight: min(max(GameMessage.double(payload["l"]) ?? 0, 0), 1),
                                          tilt: min(max(GameMessage.double(payload["t"]) ?? 0, -30), 30),
                                          yawning: payload["y"]?.boolValue ?? false)
+            // Their bowl, for your pet to share.
+            let bowlX = GameMessage.double(payload["wx"]), bowlY = GameMessage.double(payload["wy"])
+            PetWorld.shared.showFriendBowl(at: bowlX.flatMap { x in bowlY.map { CGPoint(x: min(max(x, 0), 1), y: min(max($0, 0), 1)) } },
+                                           fill: min(max(GameMessage.double(payload["wf"]) ?? 1, 0), 1))
         case "chase":
             PetWorld.shared.chased()
         case "tag":
@@ -370,6 +374,12 @@ final class PetPlay: ObservableObject {
         if pet.pose.action == .leap {
             message["l"] = .double((pet.pose.flight * 100).rounded() / 100)
             message["t"] = .double(pet.pose.tilt.rounded())
+        }
+        // Your bowl, while it's out, for their pet to share.
+        if let bowl = PetWorld.shared.bowlState {
+            message["wx"] = .double(bowl.spot.x)
+            message["wy"] = .double(bowl.spot.y)
+            message["wf"] = .double((bowl.fill * 100).rounded() / 100)
         }
         if pet.pose.isYawning {
             message["y"] = .bool(true)
