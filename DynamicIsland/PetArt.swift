@@ -250,7 +250,8 @@ nonisolated struct PetPose: Equatable, Sendable {
     var isDizzy = false
     /// Tumbling through the air, in degrees.
     var spin: Double = 0
-    /// Head down to the ground, 0 to 1: biting a ball off the floor.
+    /// Head down, 0 to 2: up to 1 to bite a ball off the floor; past 1, nose deep in a bowl,
+    /// eating.
     var headDip: Double = 0
     /// A ball held in its mouth, in this color.
     var ball: PetRGB?
@@ -337,7 +338,9 @@ private struct PetDrawing {
         var body = context
         body.translateBy(x: 0, y: -bob - lift + legLength * (1 - bend))
         // Galloping it rocks; leaping it points where it's going; crouching its rear's up and wiggling.
-        let pitch = leaping ? pose.tilt : gallop ? sin(cycle) * 6 : crouching ? 5 + sin(pose.time * 15) * 2.5 : 0
+        // Eating, its front dips a little toward the bowl.
+        let eating = min(max(pose.headDip - 1, 0), 1)
+        let pitch = leaping ? pose.tilt : gallop ? sin(cycle) * 6 : crouching ? 5 + sin(pose.time * 15) * 2.5 : eating * 6
         if pitch != 0 {
             body.translateBy(x: -1.5, y: bodyY)
             body.rotate(by: .degrees(pitch))
@@ -388,15 +391,30 @@ private struct PetDrawing {
         // Near legs.
         leg(-6, phase: 0, color: base, back: true)
         leg(6.5, phase: .pi, color: base, back: false)
-        // The head leans forward a touch when running, and goes down to the ground to bite.
+        // The head leans forward a touch when running, and goes down to the ground to bite, or
+        // further down into the bowl to eat.
         let dip = CGFloat(min(max(pose.headDip, 0), 1))
+        let deeper = CGFloat(eating)
         // Crouching, the head's low and forward, eyes on what it's after.
         let low: CGFloat = crouching ? 3 : 0
-        let headCenter = CGPoint(x: (gallop || leaping ? 10.5 : 9.5) + dip * 2.5 + low * 0.4, y: (isCat ? -17 : isPoodle ? -20.5 : -18) + dip * 4.5 + low)
+        let headCenter = CGPoint(x: (gallop || leaping ? 10.5 : 9.5) + dip * 2.5 + deeper * 5 + low * 0.4,
+                                 y: (isCat ? -17 : isPoodle ? -20.5 : -18) + dip * 4.5 + deeper * 4 + low)
+        if deeper > 0 {
+            // A neck, so the head stays on when it's that far down.
+            let from = CGPoint(x: bodyRect.maxX - 6, y: bodyY - 3)
+            var neck = Path()
+            neck.move(to: from)
+            neck.addLine(to: headCenter)
+            body.stroke(neck, with: .color(base), style: StrokeStyle(lineWidth: isPoodle ? 6 : 8, lineCap: .round))
+        }
         var headContext = body
+        if deeper > 0 {
+            // Nose in the bowl, never through the floor under it.
+            headContext.clip(to: Path(CGRect(x: -40, y: -60, width: 80, height: 57.5)))
+        }
         if dip > 0 {
             headContext.translateBy(x: headCenter.x, y: headCenter.y)
-            headContext.rotate(by: .degrees(Double(dip) * 22))
+            headContext.rotate(by: .degrees(Double(dip) * 22 + Double(deeper) * 45))
             headContext.translateBy(x: -headCenter.x, y: -headCenter.y)
         }
         head(&headContext, center: headCenter)

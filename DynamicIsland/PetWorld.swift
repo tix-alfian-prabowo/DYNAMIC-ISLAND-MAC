@@ -67,6 +67,13 @@ final class PetActor: ObservableObject {
     /// Stars going round its head, after being shaken.
     @Published var isDizzy = false
     @Published var opacity: Double = 1
+    /// Eating: the bowl, drawn again in front of it so its nose goes into the bowl rather than
+    /// over it; where the bowl stands from its feet, and how full it is.
+    @Published var bowlInFront: BowlInFront?
+    struct BowlInFront: Equatable {
+        var offset: CGVector
+        var fill: Double
+    }
     /// Where its feet are, in screen coordinates.
     var position: CGPoint = .zero
     var bubbleUntil: CFTimeInterval = 0
@@ -207,6 +214,9 @@ private struct PetSprite: View {
                 pose.ball = PetBallColors.color(actor.ballColor)
             }
             drawPet(&context, look: actor.look, pose: pose, feet: feet, height: height)
+            if let bowl = actor.bowlInFront {
+                drawPetBowl(&context, feet: CGPoint(x: feet.x + bowl.offset.dx, y: feet.y - bowl.offset.dy), width: 30, fill: bowl.fill)
+            }
             let ahead: CGFloat = actor.pose.facingRight ? 1 : -1
             if actor.isDizzy {
                 // Little stars circling over its head.
@@ -1001,10 +1011,10 @@ final class PetWorld: ObservableObject {
         startTimer()
     }
 
-    /// Beside the bowl, facing it.
+    /// Beside the bowl, facing it, close enough to put its nose in.
     private func bowlSpot(_ spot: CGPoint, for pet: PetActor) -> CGPoint {
         let side: CGFloat = pet.position.x < spot.x ? -1 : 1
-        return clamped(CGPoint(x: spot.x + side * (pet.height * 0.55 + 12), y: spot.y))
+        return clamped(CGPoint(x: spot.x + side * (pet.height * 0.42 + 12), y: spot.y))
     }
 
     /// The bowl's empty: full and happy for the next few hours.
@@ -1384,6 +1394,7 @@ final class PetWorld: ObservableObject {
         var speed: CGFloat = 0
         var target: CGPoint?
         var chewing = false
+        var bowlInFront: PetActor.BowlInFront?
         pose.headDip = 0
         switch activity {
         case .arriving(let from, let to, let start):
@@ -1705,6 +1716,10 @@ final class PetWorld: ObservableObject {
                 let left = max((until - now) / Self.eatingTime, 0)
                 if bowl.model.fill != left { bowl.model.fill = left }
                 chewing = sin(now * 12) > 0
+                // Nose down in the bowl, coming up a touch between mouthfuls.
+                pose.headDip = 1.92 + sin(now * 6) * 0.08
+                bowlInFront = PetActor.BowlInFront(offset: CGVector(dx: bowl.spot.x - mine.position.x, dy: bowl.spot.y - mine.position.y),
+                                                   fill: left)
                 if now >= nextMunch {
                     PetSounds.shared.play(.munch, for: mine.look, volume: 0.7)
                     nextMunch = now + 0.55
@@ -1751,6 +1766,7 @@ final class PetWorld: ObservableObject {
             mine.bubble = nil
         }
         if pose != mine.pose { mine.pose = pose }
+        if bowlInFront != mine.bowlInFront { mine.bowlInFront = bowlInFront }
         mine.window?.place(feet: mine.position)
     }
 
