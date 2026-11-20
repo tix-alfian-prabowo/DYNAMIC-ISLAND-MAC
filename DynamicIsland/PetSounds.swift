@@ -99,7 +99,7 @@ final class PetSounds: ObservableObject {
 
     private struct Voice {
         enum Kind: String {
-            case cat, dog, poodle
+            case cat, dog, poodle, goat
         }
 
         let kind: Kind
@@ -112,7 +112,7 @@ final class PetSounds: ObservableObject {
                 pitch = 1
                 return
             }
-            kind = look.kind == .cat ? .cat : look.isPoodle ? .poodle : .dog
+            kind = look.kind == .cat ? .cat : look.kind == .goat ? .goat : look.isPoodle ? .poodle : .dog
             var hash: UInt32 = 2_166_136_261
             for byte in look.name.lowercased().utf8 {
                 hash = (hash ^ UInt32(byte)) &* 16_777_619
@@ -126,7 +126,7 @@ final class PetSounds: ObservableObject {
     /// How many takes a sound has; one is picked at random each time, so it doesn't get samey.
     private static func takes(_ sound: Sound, _ kind: Voice.Kind) -> Int {
         switch (sound, kind) {
-        case (.talk, .cat), (.happy, .cat): return 3
+        case (.talk, .cat), (.happy, .cat), (.talk, .goat): return 3
         case (.talk, .dog): return 4
         case (.talk, .poodle), (.happy, .dog), (.bored, .dog), (.bored, .poodle): return 2
         default: return 1
@@ -159,6 +159,12 @@ final class PetSounds: ObservableObject {
         case (.hungry, .dog): return clip("dog-whine-1", 0.85) + silence(0.12) + bark(2)
         case (.hungry, .poodle):
             return clip("dog-whine-3") + silence(0.08) + bark(1, yip) + silence(0.04) + bark(2, yip * 1.04)
+        case (.talk, .goat): return clip("goat-bleat-\(take + 1)")
+        case (.surprise, .goat): return clip("goat-short", 1.2)
+        case (.happy, .goat): return clip("goat-short") + silence(0.08) + clip("goat-short", 1.08)
+        case (.bored, .goat): return clip("goat-long")
+        case (.hungry, .goat): return clip("goat-bleat-2") + silence(0.15) + clip("goat-bleat-3")
+        case (.purr, .goat): return clip("goat-bleat-1", 0.92)
         case (.purr, .cat): return clip("cat-purr")
         case (.purr, _): return clip("dog-whine-1", 1.12)
         case (.munch, _): return munch()

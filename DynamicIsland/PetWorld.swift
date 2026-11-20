@@ -105,9 +105,32 @@ final class PetActor: ObservableObject {
     /// How tall it is, by its size.
     var height: CGFloat { PetWorld.petHeight * CGFloat(look.scale) }
 
-    /// The part of the screen it takes, for the pointer.
+    /// The part of the screen it takes, roughly.
     var bounds: CGRect {
         CGRect(x: position.x - height * 0.62, y: position.y - 2, width: height * 1.24, height: height + 4)
+    }
+
+    /// Whether `point` on the screen is on the pet itself (its body or its head, by how it's
+    /// standing, sitting or lying), not just the empty space round it.
+    func touches(_ point: CGPoint) -> Bool {
+        // In the drawing's units (28 to the top of the head), facing right, up from its feet.
+        let unit = height / 28
+        let ahead: CGFloat = pose.facingRight ? 1 : -1
+        let spot = CGPoint(x: (point.x - position.x) / unit * ahead, y: (point.y - position.y) / unit)
+        let parts: [CGRect]
+        switch pose.action {
+        case .sleep:
+            parts = [CGRect(x: -14, y: -1, width: 26, height: 11), CGRect(x: 2, y: -1, width: 15, height: 15)]
+        case .stretch:
+            parts = [CGRect(x: -15, y: -1, width: 18, height: 20), CGRect(x: -2, y: -1, width: 20, height: 15)]
+        case .lie, .belly:
+            parts = [CGRect(x: -15, y: -1, width: 27, height: 13), CGRect(x: 2, y: 2, width: 16, height: 20)]
+        case .sit, .groom:
+            parts = [CGRect(x: -11, y: -1, width: 19, height: 19), CGRect(x: -4, y: 12, width: 18, height: 17)]
+        default:
+            parts = [CGRect(x: -15, y: -1, width: 26, height: 18), CGRect(x: 2, y: 10, width: 16, height: 17)]
+        }
+        return parts.contains { $0.contains(spot) }
     }
 }
 
@@ -130,7 +153,7 @@ private final class PetWindow: NSPanel {
         hidesOnDeactivate = false
         isReleasedWhenClosed = false
         ignoresMouseEvents = true
-        let mouse = PetMouseView(frame: CGRect(origin: .zero, size: Self.size), area: { [weak actor] in actor?.bounds }, onMouse: onMouse)
+        let mouse = PetMouseView(frame: CGRect(origin: .zero, size: Self.size), hits: { [weak actor] in actor?.touches($0) ?? false }, onMouse: onMouse)
         let host = NSHostingView(rootView: PetSprite(actor: actor))
         host.sizingOptions = []
         host.frame = mouse.bounds
@@ -160,16 +183,20 @@ private final class PetMouseView: NSView {
         case down, drag, up(moved: Bool)
     }
 
-    /// Where on the screen it catches the pointer.
-    private let area: () -> CGRect?
+    /// Whether a point on the screen catches the pointer.
+    private let hits: (CGPoint) -> Bool
     private let onMouse: (Event) -> Void
     private var downAt: CGPoint?
     private var moved = false
 
-    init(frame: CGRect, area: @escaping () -> CGRect?, onMouse: @escaping (Event) -> Void) {
-        self.area = area
+    init(frame: CGRect, hits: @escaping (CGPoint) -> Bool, onMouse: @escaping (Event) -> Void) {
+        self.hits = hits
         self.onMouse = onMouse
         super.init(frame: frame)
+    }
+
+    convenience init(frame: CGRect, area: @escaping () -> CGRect?, onMouse: @escaping (Event) -> Void) {
+        self.init(frame: frame, hits: { area()?.contains($0) ?? false }, onMouse: onMouse)
     }
 
     required init?(coder: NSCoder) { nil }
@@ -177,9 +204,9 @@ private final class PetMouseView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard let window, let area = area() else { return nil }
+        guard let window else { return nil }
         let onScreen = window.convertPoint(toScreen: convert(point, to: nil))
-        return area.contains(onScreen) ? self : nil
+        return hits(onScreen) ? self : nil
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -1770,7 +1797,7 @@ final class PetWorld: ObservableObject {
         var pose = mine.pose
         pose.time += elapsed
         let pointer = NSEvent.mouseLocation
-        let hovered = mine.bounds.contains(pointer)
+        let hovered = mine.touches(pointer)
         if hovered != mine.isHovered { mine.isHovered = hovered }
         var isHeld = false
         if case .held = activity { isHeld = true }
@@ -1778,7 +1805,7 @@ final class PetWorld: ObservableObject {
         if hovered && !wasHovered, isFree, !isAsleep, !isPestering {
             mine.say(.heart, for: 1.2, now: now)
             // A dog often bounces with joy when you come over.
-            if mine.look.kind == .dog, Double.random(in: 0..<1) < 0.35, !isFetching, bowl == nil {
+            if mine.look.kind != .cat, Double.random(in: 0..<1) < 0.35, !isFetching, bowl == nil {
                 activity = .hop(start: now)
                 plan = []
             }
@@ -2042,7 +2069,8 @@ final class PetWorld: ObservableObject {
         case .petted(let until):
             happy = true
             eyesShut = true
-            if mine.look.kind == .cat {
+            if mine.look.kind != .dog {
+                // A cat (or a goat) lies down for it; a dog rolls over.
                 pose.action = .lie
                 if now >= nextPurr {
                     PetSounds.shared.play(.purr, for: mine.look, volume: 0.8)
@@ -2590,7 +2618,7 @@ final class PetWorld: ObservableObject {
 
     private func stepFriend(_ friend: PetActor, elapsed: Double, now: CFTimeInterval) {
         friend.pose.time += elapsed
-        let hovered = friend.bounds.contains(NSEvent.mouseLocation)
+        let hovered = friend.touches(NSEvent.mouseLocation)
         if hovered != friend.isHovered { friend.isHovered = hovered }
         friend.window?.catchesClicks(hovered)
         if let target = friendTarget {

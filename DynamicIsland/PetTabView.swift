@@ -11,6 +11,8 @@ struct PetTabView: View {
     @ObservedObject private var sounds = PetSounds.shared
     @State private var draft = PetLook(kind: .cat, coat: 0, name: PetKind.cat.defaultName)
     @State private var isEditing = false
+    /// Choosing: first which animal, then its color, size, what it wears and its name.
+    @State private var picksAnimal = true
 
     var body: some View {
         Group {
@@ -43,6 +45,7 @@ struct PetTabView: View {
                             .font(.system(size: layout.wide(18, 24), weight: .bold, design: .rounded))
                         Button {
                             draft = look
+                            picksAnimal = false
                             isEditing = true
                         } label: {
                             Image(systemName: "pencil")
@@ -172,15 +175,101 @@ struct PetTabView: View {
 
     // MARK: Choosing
 
-    private var chooser: some View {
+    @ViewBuilder private var chooser: some View {
+        if picksAnimal {
+            animalPicker
+        } else {
+            editor
+        }
+    }
+
+    /// Step one: a cat, a dog, a poodle or a goat.
+    private var animalPicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Text(store.look == nil ? "Choose your pet" : "Choose an animal")
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                Spacer(minLength: 0)
+                if store.look != nil {
+                    DropButton(title: "Cancel", height: 22) {
+                        isEditing = false
+                        picksAnimal = true
+                    }
+                    .frame(width: 66)
+                }
+            }
+            HStack(spacing: 10) {
+                ForEach(PetLook.choices.indices, id: \.self) { index in
+                    animalCard(PetLook.choices[index].kind, breed: PetLook.choices[index].breed)
+                }
+            }
+            Text("Next you pick its color, size, what it wears and its name.")
+                .font(.system(size: 10, design: .rounded))
+                .foregroundColor(DropStyle.muted)
+            Spacer(minLength: 0)
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    private func animalCard(_ kind: PetKind, breed: PetBreed) -> some View {
+        let isCurrent = draft.kind == kind && draft.breed == breed
+        // Unpicked, a poodle shows white, the others their first coat.
+        let preview = PetLook(kind: kind, coat: isCurrent ? draft.coat : breed == .poodle ? 4 : 0, name: "", breed: breed)
+        return Button {
+            if !isCurrent {
+                // A name still the old animal's own follows the new one.
+                let keepsName = draft.name != draft.defaultName && !draft.name.isEmpty
+                var picked = PetLook(kind: kind, coat: breed == .poodle ? 4 : 0, name: "", scale: draft.scale, breed: breed,
+                                     wear: draft.wear, wearColor: draft.wearColor)
+                picked.name = keepsName ? draft.name : picked.defaultName
+                draft = picked
+            }
+            picksAnimal = false
+        } label: {
+            VStack(spacing: 4) {
+                PetPortrait(look: preview, action: .stand)
+                    .frame(width: layout.wide(76, 96), height: layout.wide(60, 78))
+                Text(preview.title)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(isCurrent && store.look != nil ? 0.16 : 0.06)))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.white.opacity(isCurrent && store.look != nil ? 0.5 : 0.1), lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .help("A \(preview.title.lowercased())")
+    }
+
+    /// Step two: how it looks and its name.
+    private var editor: some View {
         HStack(alignment: .center, spacing: 20) {
             PetPortrait(look: draft, action: .sit, showsSize: true)
                 .frame(width: layout.wide(90, 120), height: layout.wide(76, 100))
                 .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(DropStyle.faint))
             VStack(alignment: .leading, spacing: 8) {
-                Text(store.look == nil ? "Choose your pet" : "Change your pet")
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
-                PetChooser(look: $draft, compact: false)
+                HStack(spacing: 8) {
+                    Button {
+                        picksAnimal = true
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 10, weight: .bold))
+                            Text(draft.title)
+                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        }
+                        .foregroundColor(DropStyle.muted)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .pointingHandCursor()
+                    .help("Choose another animal")
+                    Text(store.look == nil ? "Your \(draft.title.lowercased())" : "Change your \(draft.title.lowercased())")
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                }
+                PetChooser(look: $draft, compact: false, showsKinds: false)
                 HStack(spacing: 8) {
                     TextField("Name", text: $draft.name)
                         .textFieldStyle(.plain)
@@ -194,7 +283,10 @@ struct PetTabView: View {
                     DropButton(title: store.look == nil ? "Adopt" : "Save", systemImage: "pawprint.fill", prominent: true, height: 24, action: save)
                         .frame(width: 90)
                     if store.look != nil {
-                        DropButton(title: "Cancel", height: 24) { isEditing = false }
+                        DropButton(title: "Cancel", height: 24) {
+                            isEditing = false
+                            picksAnimal = true
+                        }
                             .frame(width: 66)
                     }
                 }
@@ -207,6 +299,7 @@ struct PetTabView: View {
     private func save() {
         store.adopt(draft)
         isEditing = false
+        picksAnimal = true
     }
 }
 
@@ -214,14 +307,18 @@ struct PetTabView: View {
 struct PetChooser: View {
     @Binding var look: PetLook
     let compact: Bool
+    /// The cat / dog / poodle / goat chips, where the animal isn't picked on a page of its own.
+    var showsKinds = true
 
     private static let swatchesPerRow = 6
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: compact ? 8 : 10) {
-                ForEach(PetLook.choices.indices, id: \.self) { index in
-                    kindChip(PetLook.choices[index].kind, breed: PetLook.choices[index].breed)
+                if showsKinds {
+                    ForEach(PetLook.choices.indices, id: \.self) { index in
+                        kindChip(PetLook.choices[index].kind, breed: PetLook.choices[index].breed)
+                    }
                 }
                 swatches
             }

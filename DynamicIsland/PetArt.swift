@@ -5,11 +5,14 @@ import SwiftUI
 
 nonisolated enum PetKind: String, Codable, CaseIterable, Sendable {
     case cat, dog
+    /// Friends on a version without goats don't see one.
+    case goat
 
     var title: String {
         switch self {
         case .cat: return "Cat"
         case .dog: return "Dog"
+        case .goat: return "Goat"
         }
     }
 
@@ -57,6 +60,29 @@ nonisolated enum PetKind: String, Codable, CaseIterable, Sendable {
                 PetCoat.cottonCandy,
                 PetCoat.confetti,
             ]
+        case .goat:
+            return [
+                PetCoat(name: "White", base: .rgb(0.97, 0.96, 0.93), dark: .rgb(0.82, 0.78, 0.72), light: .rgb(1, 0.98, 0.95), marking: .none),
+                PetCoat(name: "Brown", base: .rgb(0.62, 0.42, 0.26), dark: .rgb(0.42, 0.27, 0.15), light: .rgb(0.88, 0.74, 0.58), marking: .none),
+                PetCoat(name: "Black", base: .rgb(0.18, 0.17, 0.18), dark: .rgb(0.1, 0.09, 0.1), light: .rgb(0.62, 0.6, 0.6), marking: .none),
+                PetCoat(name: "Gray", base: .rgb(0.6, 0.6, 0.62), dark: .rgb(0.4, 0.4, 0.43), light: .rgb(0.88, 0.88, 0.9), marking: .none),
+                PetCoat(name: "Cream", base: .rgb(0.96, 0.88, 0.72), dark: .rgb(0.82, 0.68, 0.5), light: .rgb(1, 0.97, 0.9), marking: .none),
+                PetCoat(name: "Pygmy", base: .rgb(0.55, 0.5, 0.45), dark: .rgb(0.25, 0.22, 0.2), light: .rgb(0.86, 0.8, 0.72), marking: .stripes),
+                PetCoat(name: "Nubian", base: .rgb(0.7, 0.45, 0.28), dark: .rgb(0.97, 0.95, 0.92), light: .rgb(0.93, 0.82, 0.68), marking: .patches,
+                        accent: .rgb(0.97, 0.95, 0.92)),
+                PetCoat(name: "Boer", base: .rgb(0.98, 0.97, 0.95), dark: .rgb(0.6, 0.32, 0.18), light: .rgb(1, 0.98, 0.95), marking: .patches,
+                        accent: .rgb(0.6, 0.32, 0.18)),
+            ] + PetCoat.playful + [
+                PetCoat(name: "Alpine", base: .rgb(0.72, 0.55, 0.35), dark: .rgb(0.15, 0.13, 0.12), light: .rgb(0.92, 0.84, 0.7), marking: .patches,
+                        accent: .rgb(0.95, 0.92, 0.86)),
+                PetCoat(name: "Toggenburg", base: .rgb(0.6, 0.5, 0.36), dark: .rgb(0.95, 0.93, 0.88), light: .rgb(0.95, 0.93, 0.88), marking: .spots,
+                        accent: .rgb(0.42, 0.33, 0.22)),
+                PetCoat(name: "Spotted", base: .rgb(0.97, 0.96, 0.94), dark: .rgb(0.2, 0.18, 0.18), light: .rgb(0.98, 0.96, 0.93), marking: .spots,
+                        accent: .rgb(0.65, 0.42, 0.25)),
+                PetCoat(name: "Silver", base: .rgb(0.78, 0.8, 0.86), dark: .rgb(0.5, 0.52, 0.62), light: .rgb(0.95, 0.96, 0.99), marking: .stripes),
+                PetCoat.cottonCandy,
+                PetCoat.confetti,
+            ]
         }
     }
 
@@ -65,6 +91,7 @@ nonisolated enum PetKind: String, Codable, CaseIterable, Sendable {
         switch self {
         case .cat: return "meow"
         case .dog: return "woof"
+        case .goat: return "baa"
         }
     }
 
@@ -72,6 +99,7 @@ nonisolated enum PetKind: String, Codable, CaseIterable, Sendable {
         switch self {
         case .cat: return "Mochi"
         case .dog: return "Kopi"
+        case .goat: return "Embek"
         }
     }
 }
@@ -167,7 +195,7 @@ nonisolated struct PetLook: Codable, Equatable, Sendable {
     var defaultName: String { isPoodle ? "Coco" : kind.defaultName }
 
     /// What the chooser offers: a cat, a dog, a poodle.
-    static let choices: [(kind: PetKind, breed: PetBreed)] = [(.cat, .standard), (.dog, .standard), (.dog, .poodle)]
+    static let choices: [(kind: PetKind, breed: PetBreed)] = [(.cat, .standard), (.dog, .standard), (.dog, .poodle), (.goat, .standard)]
 
     struct Size: Sendable {
         let name: String
@@ -321,6 +349,7 @@ private struct PetDrawing {
 
     var isCat: Bool { look.kind == .cat }
     var isPoodle: Bool { look.isPoodle }
+    var isGoat: Bool { look.kind == .goat }
     var base: Color { coat.base.color }
     var dark: Color { coat.dark.color }
     var light: Color { coat.light.color }
@@ -365,10 +394,10 @@ private struct PetDrawing {
         let bob = action == .walk || gallop || dancing ? CGFloat(abs(sin(cycle)) * (gallop ? 1.6 : dancing ? 1.5 : 0.6))
             : CGFloat(sin(pose.time * 2.2) * 0.25)
         let lift: CGFloat = lifted ? 2.5 : leaping ? 1.5 : 0
-        let legLength: CGFloat = isCat ? 6.5 : isPoodle ? 8 : 7.2
+        let legLength: CGFloat = isCat ? 6.5 : isPoodle ? 8 : isGoat ? 8.6 : 7.2
         // Crouching, its legs fold under it and it sinks.
         let bend: CGFloat = crouching ? 0.42 : 1
-        let bodyY: CGFloat = isCat ? -9.5 : isPoodle ? -11.5 : -10.5
+        let bodyY: CGFloat = isCat ? -9.5 : isPoodle || isGoat ? -11.8 : -10.5
         var body = context
         body.translateBy(x: 0, y: -bob - lift + legLength * (1 - bend))
         // Galloping it rocks; leaping it points where it's going; crouching its rear's up and wiggling.
@@ -399,10 +428,14 @@ private struct PetDrawing {
             var leg = body
             leg.translateBy(x: x, y: -legLength + 0.5)
             leg.rotate(by: .degrees(angle))
-            let width: CGFloat = isPoodle ? 2.4 : 3.2
+            let width: CGFloat = isPoodle ? 2.4 : isGoat ? 2.7 : 3.2
             let rect = CGRect(x: -width / 2, y: 0, width: width, height: legLength * bend + bob + lift - 0.3)
             leg.fill(Path(roundedRect: rect, cornerRadius: width / 2 - 0.1), with: .color(color))
-            if isPoodle {
+            if isGoat {
+                // A little dark hoof.
+                leg.fill(Path(roundedRect: CGRect(x: -width / 2 - 0.2, y: rect.maxY - 1.8, width: width + 0.4, height: 2), cornerRadius: 0.5),
+                         with: .color(Color(white: 0.22)))
+            } else if isPoodle {
                 // A pom-pom cuff for a foot.
                 pom(&leg, center: CGPoint(x: 0, y: rect.maxY - 1.4), radius: 2.5, color: color)
             } else {
@@ -435,7 +468,7 @@ private struct PetDrawing {
         // Crouching, the head's low and forward, eyes on what it's after.
         let low: CGFloat = crouching ? 3 : 0
         let headCenter = CGPoint(x: (gallop || leaping ? 10.5 : 9.5) + dip * 2.5 + deeper * 5 + low * 0.4,
-                                 y: (isCat ? -17 : isPoodle ? -20.5 : -18) + dip * 4.5 + deeper * 4 + low)
+                                 y: (isCat ? -17 : isPoodle || isGoat ? -20.5 : -18) + dip * 4.5 + deeper * 4 + low)
         if deeper > 0 {
             // A neck, so the head stays on when it's that far down.
             let from = CGPoint(x: bodyRect.maxX - 6, y: bodyY - 3)
@@ -522,6 +555,11 @@ private struct PetDrawing {
             path.addLine(to: tip)
             context.stroke(path, with: .color(base), style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
             pom(&context, center: tip, radius: 2.9, color: pomColor(2))
+        } else if isGoat {
+            // A short tail that sticks up and flicks.
+            let flick = sin(pose.time * (pose.isHappy ? 18 : 3)) * (pose.isHappy ? 1.6 : 0.6)
+            path.addQuadCurve(to: CGPoint(x: root.x - 2.2 + flick * 0.4, y: root.y - 5.2 + abs(flick) * 0.3), control: CGPoint(x: root.x - 3, y: root.y - 1.5))
+            context.stroke(path, with: .color(base), style: StrokeStyle(lineWidth: 2.6, lineCap: .round))
         } else {
             // A short tail that wags, fast when happy.
             let wag = sin(pose.time * (pose.isHappy ? 22 : 4)) * (pose.isHappy ? 0.5 : 0.18)
@@ -551,6 +589,18 @@ private struct PetDrawing {
                 inner.addLine(to: CGPoint(x: baseX + 4, y: center.y - 5))
                 inner.closeSubpath()
                 context.fill(inner, with: .color(Color(red: 1, green: 0.7, blue: 0.72)))
+            }
+        }
+        if isGoat {
+            // Two horns curving back over its head, the far one darker.
+            let horn = Color(red: 0.86, green: 0.8, blue: 0.68)
+            for (index, x) in [center.x - 0.4, center.x - 2.4].enumerated() {
+                var curve = Path()
+                curve.move(to: CGPoint(x: x, y: center.y - radius + 1.6))
+                curve.addQuadCurve(to: CGPoint(x: x - 5.4, y: center.y - radius - 2.4), control: CGPoint(x: x + 0.4, y: center.y - radius - 4.6))
+                let color = index == 0 ? horn.mix(with: .black, by: 0.18) : horn
+                context.stroke(curve, with: .color(horn.mix(with: .black, by: 0.45)), style: StrokeStyle(lineWidth: 2.9, lineCap: .round))
+                context.stroke(curve, with: .color(color), style: StrokeStyle(lineWidth: 2.1, lineCap: .round))
             }
         }
         context.fill(Path(ellipseIn: face), with: .color(base))
@@ -611,7 +661,19 @@ private struct PetDrawing {
             }
         } else {
             // Snout and nose; the ear comes after the eyes.
-            if isPoodle {
+            if isGoat {
+                // A long, tapering muzzle with a little beard under the chin.
+                var beard = Path()
+                beard.move(to: CGPoint(x: center.x + 3.6, y: center.y + 4.2))
+                beard.addLine(to: CGPoint(x: center.x + 6.8, y: center.y + 4.6))
+                beard.addLine(to: CGPoint(x: center.x + 4.6, y: center.y + 8.6))
+                beard.closeSubpath()
+                context.fill(beard, with: .color(coat.marking == .none ? light.mix(with: .black, by: 0.12) : dark))
+                let muzzle = CGRect(x: center.x + 1.4, y: center.y - 0.6, width: 8.4, height: 5.4)
+                context.fill(Path(ellipseIn: muzzle), with: .color(light))
+                context.stroke(Path(ellipseIn: muzzle), with: .color(outline.opacity(0.3)), lineWidth: 0.5)
+                context.fill(Path(ellipseIn: CGRect(x: center.x + 8.2, y: center.y + 0.3, width: 1.5, height: 1.1)), with: .color(Color(white: 0.2)))
+            } else if isPoodle {
                 // Long and narrow.
                 context.fill(Path(ellipseIn: CGRect(x: center.x + 2, y: center.y + 0.3, width: 8.2, height: 4.2)), with: .color(base.mix(with: .white, by: 0.08)))
                 context.stroke(Path(ellipseIn: CGRect(x: center.x + 2, y: center.y + 0.3, width: 8.2, height: 4.2)), with: .color(outline.opacity(0.3)), lineWidth: 0.5)
@@ -669,6 +731,15 @@ private struct PetDrawing {
             let color = coat.marking == .patches ? dark : base.mix(with: .black, by: 0.07)
             pom(&ear, center: CGPoint(x: 0, y: 2.4), radius: 3.2, color: color)
             pom(&ear, center: CGPoint(x: 0.2, y: 6), radius: 3, color: color)
+        } else if isGoat {
+            // An ear sticking out sideways, flicking now and then.
+            var ear = context
+            ear.translateBy(x: center.x - 3.4, y: center.y - 2.6)
+            ear.rotate(by: .degrees(-12 + sin(pose.time * 1.3) * 6 + (pose.action == .run ? -20 : 0)))
+            let flap = CGRect(x: -7.6, y: -1.7, width: 7.6, height: 3.4)
+            ear.fill(Path(ellipseIn: flap), with: .color(coat.marking == .patches ? dark : base))
+            ear.fill(Path(ellipseIn: flap.insetBy(dx: 1.6, dy: 0.9)), with: .color(Color(red: 1, green: 0.78, blue: 0.78)))
+            ear.stroke(Path(ellipseIn: flap), with: .color(outline.opacity(0.4)), lineWidth: lineWidth)
         } else if !isCat {
             // A floppy ear at the back of the head, flying up when running or jumping.
             var ear = context
